@@ -1260,5 +1260,6 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 <p align="center">
   <sub>If this guide helped you, consider giving it a star on GitHub.</sub><br>
-  <sub>GPU passthrough is complex. This repository makes it manageable.</sub>
+  <sub>GPU passthrough is complex. This repository makes it manageable.</sub><br>
+  <sub>Last updated: 2026</sub>
 </p>
