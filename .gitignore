@@ -1,0 +1,19 @@
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# VM images (large files, do not track)
+*.qcow2
+*.img
+*.iso
+
+# Log files
+*.log
