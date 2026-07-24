@@ -46,9 +46,9 @@ warn_check() {
 
 # System checks
 echo -e "${CYAN}[System Requirements]${NC}"
-check "CPU virtualization support" lscpu
+warn_check "CPU virtualization (VT-x/AMD-V)" grep -qiE 'vmx|svm' /proc/cpuinfo
 check "Kernel modules directory" test -d /lib/modules
-warn_check "IOMMU active" dmesg
+warn_check "IOMMU active" dmesg | grep -qiE 'iommu|dmar|amd-vi|vt-d'
 echo ""
 
 # Tool checks

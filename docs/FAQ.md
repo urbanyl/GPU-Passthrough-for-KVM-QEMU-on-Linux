@@ -147,7 +147,7 @@ Yes. Each GPU needs to be in its own IOMMU group and bound to vfio-pci. Add each
 
 ### Can I use GPU passthrough with Docker?
 
-KVM/QEMU runs at the kernel level and is independent of Docker. You can manage libvirt VMs from within a Docker container, but the VM itself runs outside of Docker. See the `setup/` directory for containerized host setup scripts.
+KVM/QEMU runs at the kernel level and is independent of Docker. You can manage libvirt VMs from within a Docker container, but the VM itself runs outside of Docker.
 
 ### Can I share a GPU between host and guest?
 

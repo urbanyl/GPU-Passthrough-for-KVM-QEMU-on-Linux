@@ -22,7 +22,7 @@ sudo apt install -y \
     wget \
     dkms \
     linux-headers-"$(uname -r)" \
-    lspci \
+    pciutils \
     usbutils
 
 # Install virtualization packages

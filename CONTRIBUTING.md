@@ -15,7 +15,7 @@ Contributions are welcome. This project values accuracy, reproducibility, and cl
 - Describe the problem your change solves.
 - Include hardware context when relevant (CPU, GPU, motherboard, kernel version).
 - Keep commits focused. One logical change per commit.
-- Run `shellcheck` on any shell script before submitting.
+- Run `shellcheck` on any shell script before submitting (see `.shellcheckrc` for project rules).
 
 ## Issues
 

@@ -10,7 +10,32 @@
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
   <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
+  <img src="https://img.shields.io/badge/version-2.0.0-blue.svg" alt="Version 2.0.0">
 </p>
+
+<details>
+<summary><strong>Changelog — v2.0.0 (July 2026)</strong></summary>
+
+**Fixes:**
+- Fixed invalid `--launchSecurity ovmf` in virt-install example (removed)
+- Fixed PCI address parsing in `generate_vm_xml.sh` (slot was using bus value)
+- Fixed wrong machine type `pc-q35-8.2` → `pc-q35` (version-agnostic)
+- Fixed package name `lspci` → `pciutils` in Debian/Ubuntu setup script
+- Fixed package name `spice-spicevdagent` → `spice-vdagent` in Arch setup script
+- Fixed `install.sh` checks: CPU virt now greps `/proc/cpuinfo`, IOMMU now greps `dmesg`
+- Fixed seclabel in generated XML (removed hardcoded `model='apparmor'`)
+- Fixed false reference to "containerized host setup scripts" in FAQ
+
+**Additions:**
+- Added `.editorconfig` for consistent code style across editors
+- Added `.shellcheckrc` with project-wide shellcheck rules
+- Added full PCI address parsing (domain, bus, slot, function) in XML generator
+
+**Improvements:**
+- Truncated duplicated Troubleshooting and FAQ sections — see `docs/TROUBLESHOOTING.md` and `docs/FAQ.md` for full versions
+- Updated CONTRIBUTING.md with shellcheck config reference
+- Updated repository structure in README to reflect actual layout
+</details>
 
 ---
 
@@ -38,8 +63,8 @@
   - [14. Performance Tuning](#14-performance-tuning)
 - [Scripts](#scripts)
 - [Single-GPU Passthrough](#single-gpu-passthrough)
-- [Troubleshooting](#troubleshooting)
-- [FAQ](#faq)
+- [Troubleshooting](#troubleshooting) — see also [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
+- [FAQ](#faq) — see also [`docs/FAQ.md`](docs/FAQ.md)
 - [Repository Structure](#repository-structure)
 - [Contributing](#contributing)
 - [License](#license)
@@ -407,7 +432,8 @@ sudo nano /etc/modprobe.d/vfio.conf
 Add:
 
 ```
-options vfio-pci ids=10de:1af2,10de:1af9 softdep nvidia pre: vfio-pci
+options vfio-pci ids=10de:1af2,10de:1af9
+softdep nvidia pre: vfio-pci
 ```
 
 > **Again, replace the IDs with your actual GPU IDs.**
@@ -600,7 +626,6 @@ sudo virt-install \
   --hostdev 0000:01:00.1 \
   --features kvm=hidden \
   --tpm backend.type=emulator,backend.version=2.0,model=tpm-crb \
-  --launchSecurity ovmf \
   --autostart
 ```
 
@@ -1011,199 +1036,38 @@ esac
 
 ## Troubleshooting
 
-### VM Fails to Start
+Common issues and quick fixes are listed below. For the full troubleshooting reference (with diagnosis commands, per-symptom tables, and extended workarounds), see [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 
-**Symptom:** `virsh start` fails or the VM immediately exits.
-
-**Diagnosis:**
-
-```bash
-# Check libvirt logs
-sudo journalctl -u libvirtd --since "5 minutes ago"
-
-# Check QEMU logs
-sudo journalctl -u libvirtd -f
-
-# Check if VFIO is properly bound
-lspci -k | grep -A 3 -i 'vga\|3d'
-```
-
-**Common causes and fixes:**
-
-| Cause | Fix |
-|-------|-----|
-| GPU bound to host driver | Rebuild initramfs, verify `/etc/modprobe.d/vfio.conf` |
-| Wrong PCI IDs | Re-check `lspci -nn` output |
-| Missing audio function | Include the audio device in VFIO IDs |
-| OVMF not installed | Install the `ovmf` package for your distro |
-| Secure Boot conflict | Disable Secure Boot in BIOS |
-
----
-
-### Black Screen After GPU Driver Installation
-
-**Symptom:** The guest display goes black after installing the NVIDIA/AMD driver.
-
-**Cause:** The display output has switched from the virtual GPU (SPICE/virtio) to the physical GPU.
-
-**Fix:**
-1. Connect a monitor to the passthrough GPU
-2. Or use Sunshine/Moonlight to access the VM remotely
-3. Or use a remote desktop solution (RDP, Parsec)
-
-This is normal behavior, not an error.
-
----
-
-### GPU Does Not Reset After VM Shutdown (GPU Reset Bug)
-
-**Symptom:** The GPU works in the first VM session but fails to initialize in subsequent sessions without a host reboot.
-
-**Affected GPUs:**
-- NVIDIA GTX 900 series (known issues)
-- NVIDIA GTX 1000 series (partial support)
-- Some AMD Polaris and Vega cards
-
-**Workarounds:**
-1. Reboot the host between VM sessions
-2. Use vendor-specific reset scripts (e.g., `vendor-reset` kernel module for AMD)
-3. Check if your GPU model is listed on the [VFIO GPU reset wiki](https://wiki.archlinux.org/title/PCI_passthrough_via_OVMF#GPU_does_not_reset)
-
----
-
-### GPU Appears in Host After Reboot
-
-**Symptom:** The passthrough GPU is claimed by the host driver after rebooting.
-
-**Diagnosis:**
-
-```bash
-# Check if vfio-pci is loaded
-lsmod | grep vfio
-
-# Check if kernel parameters were applied
-cat /proc/cmdline
-
-# Check initramfs contains vfio modules
-lsinitramfs /boot/initrd.img-$(uname -r) | grep vfio
-```
-
-**Fix:**
-- Verify kernel parameters in `/etc/default/grub`
-- Rebuild initramfs: `sudo update-initramfs -u`
-- Rebuild GRUB: `sudo update-grub`
-- Reboot
-
----
-
-### VM is Slow or Stuttering
-
-**Possible causes and fixes:**
-
-| Issue | Fix |
-|-------|-----|
-| CPU governor on powersave | Set to `performance` |
-| vCPUs not pinned to physical cores | Add CPU pinning in VM XML |
-| Memory ballooning enabled | Disable balloon device |
-| Host services competing for CPU | Stop unnecessary services |
-| I/O scheduler causing latency | Set NVMe scheduler to `none` |
-| NUMA topology mismatch | Align vCPU placement with NUMA nodes |
-
----
-
-### Error: "vfio: failed to set up container"
-
-```bash
-# Ensure the vfio modules are loaded
-sudo modprobe vfio
-sudo modprobe vfio_pci
-sudo modprobe vfio_iommu_type1
-```
-
----
-
-### Windows BSOD During Installation
-
-- Make sure you are using the correct VirtIO driver for your disk bus
-- Try a different VirtIO ISO version
-- Reduce the number of vCPUs temporarily
-- Disable Hyper-V enlightenments during initial install, enable after
-
----
-
-### NVIDIA Error Code 43 in Device Manager
-
-This is the most common NVIDIA-specific issue. The driver detects it is running in a VM and refuses to initialize.
-
-**Fix:** Ensure all of the following are set in your VM XML:
-
-```xml
-<hyperv mode='custom'>
-  <vendor_id state='on' value='123456789ab'/>
-  <!-- ... other hyperv options ... -->
-</hyperv>
-<kvm>
-  <hidden state='on'/>
-</kvm>
-```
-
-Then shut down the VM completely (not just reboot) and start it again.
+| Issue | Quick Fix | Details |
+|-------|-----------|---------|
+| VM fails to start | Rebuild initramfs, verify VFIO IDs | Full guide in [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#vm-does-not-start) |
+| Black screen after GPU driver install | Connect monitor to passthrough GPU or use remote access | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#black-screen-after-driver-install) |
+| NVIDIA Error Code 43 | Add `<kvm><hidden state='on'/></kvm>` and `<vendor_id>` to VM XML | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#nvidia-error-code-43) |
+| GPU stuck after VM shutdown (reset bug) | Reboot host, or install `vendor-reset` kernel module | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#gpu-does-not-reset) |
+| GPU bound to host driver after reboot | Verify kernel params, rebuild initramfs and bootloader | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#gpu-bound-to-host-after-reboot) |
+| VM is slow or stuttering | Set CPU governor to `performance`, pin vCPUs, disable balloon | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#vm-is-slow-or-stuttering) |
+| Windows BSOD during install | Use correct VirtIO driver, reduce vCPUs temporarily | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#bsod-during-installation) |
+| `vfio: failed to set up container` | Load modules: `modprobe vfio vfio_pci vfio_iommu_type1` | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#vfio-module-errors) |
+| IOMMU not enabled | Enable VT-d/AMD-Vi in BIOS, add kernel parameters | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#iommu-not-enabled) |
+| Bad IOMMU groups | Move GPU to different slot, enable ACS, update BIOS | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#bad-iommu-groups) |
+| Guest display flickering | Remove or disable virtual video device | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#guest-display-flickering) |
+| Network not working in guest | Install VirtIO net driver or switch to emulated NIC | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#network-not-working-in-guest) |
+| USB passthrough issues | Pass through a full USB controller via PCI | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#usb-passthrough-issues) |
+| Audio issues | Add user to `audio`/`pulse-access` groups | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#audio-issues) |
 
 ---
 
 ## FAQ
 
-<details>
-<summary><strong>Can I use single-GPU passthrough?</strong></summary>
+For the complete FAQ, see [`docs/FAQ.md`](docs/FAQ.md).
 
-Yes, but it is significantly more complex. See the [Single-GPU Passthrough](#single-gpu-passthrough) section. You need scripts to stop the display manager, unbind the GPU, and recover the host display after the VM shuts down.
-</details>
-
-<details>
-<summary><strong>Which GPU should I buy for passthrough?</strong></summary>
-
-NVIDIA RTX 30/40 series and AMD RX 6000/7000 series are generally well-supported. Check [r/VFIO](https://reddit.com/r/vfio) for reports on your specific model.
-</details>
-
-<details>
-<summary><strong>Do I need to pass through the audio device too?</strong></summary>
-
-Yes. The GPU's audio controller (usually the device at `.1` in the same PCI slot) must be passed through together with the VGA controller. Some setups also require passing USB controllers.
-</details>
-
-<details>
-<summary><strong>What performance can I expect?</strong></summary>
-
-Near-native. GPU performance overhead is typically 2-5%. CPU and memory overhead depend on your tuning. With proper CPU pinning and huge pages, most games run within 5% of bare-metal performance.
-</details>
-
-<details>
-<summary><strong>Can I use this for gaming?</strong></summary>
-
-Yes. With Sunshine/Moonlight or a direct monitor connection, GPU passthrough provides an excellent gaming experience. Anti-cheat software (EasyAntiCheat, BattlEye, Vanguard) may detect the VM environment.
-</details>
-
-<details>
-<summary><strong>Does this work with Secure Boot?</strong></summary>
-
-Generally no. Secure Boot often blocks custom kernel modules and UEFI configurations needed for passthrough. Disable Secure Boot in BIOS.
-</details>
-
-<details>
-<summary><strong>Can I pass through an NVMe drive directly?</strong></summary>
-
-Yes, using PCI passthrough for the NVMe controller. Alternatively, use VirtIO disk images, which are simpler and allow snapshots.
-</details>
-
-<details>
-<summary><strong>My IOMMU groups are bad. What can I do?</strong></summary>
-
-1. Move the GPU to a different PCIe slot
-2. Enable ACS in BIOS
-3. Update your BIOS firmware
-4. Use the ACS override patch (understand the security tradeoff)
-5. Consider a different motherboard
-</details>
+**Highlights:**
+- **Single-GPU passthrough?** Possible but complex — see the [Single-GPU Passthrough](#single-gpu-passthrough) section.
+- **Which GPU to buy?** NVIDIA RTX 30/40 series and AMD RX 6000/7000 series are well-supported.
+- **Do I need to pass through audio too?** Yes, include the `.1` audio function.
+- **Performance overhead?** 2-5% GPU, negligible CPU/storage/network with proper tuning.
+- **Secure Boot?** Generally no — disable it in BIOS.
+- **Bad IOMMU groups?** Move GPU to another slot, enable ACS, update BIOS, or apply the ACS override patch.
 
 ---
 
@@ -1215,20 +1079,23 @@ gpu-passthrough-kvm/
 |-- LICENSE                           # MIT License
 |-- CONTRIBUTING.md                   # Contribution guidelines
 |-- .gitignore                        # Git ignore rules
-|
+|-- .editorconfig                     # Editor style consistency
+|-- .shellcheckrc                     # ShellCheck project rules
+|-- install.sh                        # Environment verification
+
 |-- docs/
 |   |-- GUIDE.md                      # Condensed quick-reference guide
 |   |-- TROUBLESHOOTING.md            # Extended troubleshooting reference
 |   `-- FAQ.md                        # Frequently asked questions
-|
+
 |-- scripts/
 |   |-- detect_gpu.sh                 # GPU detection and ID listing
 |   |-- check_iommu_groups.sh         # IOMMU group inspection
 |   |-- check_vfio_binding.sh         # VFIO binding verification
 |   |-- bind_vfio.sh                  # Manual GPU bind/unbind (single-GPU)
 |   |-- install_packages.sh           # Package installation (multi-distro)
-|   `-- generate_vm_xml.sh            # VM XML template generator
-|
+|   |-- generate_vm_xml.sh            # VM XML template generator
+
 `-- setup/
     |-- debian-ubuntu.sh              # Debian/Ubuntu host setup
     |-- arch.sh                       # Arch Linux host setup

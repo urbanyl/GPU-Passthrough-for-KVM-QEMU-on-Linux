@@ -34,7 +34,7 @@ sudo pacman -S --noconfirm \
     bridge-utils \
     libguestfs \
     dnsmasq \
-    spice-spicevdagent \
+    spice-vdagent \
     ebtables
 
 # Enable and start libvirt

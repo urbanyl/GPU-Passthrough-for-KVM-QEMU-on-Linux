@@ -93,7 +93,7 @@ $(echo -e "$CPU_PINNING")    <emulatorpin cpuset='0'/>
   </cputune>
 
   <os>
-    <type arch='x86_64' machine='pc-q35-8.2'>hvm</type>
+    <type arch='x86_64' machine='pc-q35'>hvm</type>
     <loader readonly='yes' type='pflash'>/usr/share/OVMF/OVMF_CODE.fd</loader>
     <nvram>/var/lib/libvirt/qemu/nvram/${VM_NAME}_VARS.fd</nvram>
     <bootmenu enable='no'/>
@@ -190,38 +190,41 @@ XML="${XML}
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>"
 
+# Parse PCI address: format DDDD:BB:SS.F
+GPU_DOMAIN="0x0000"
+GPU_BUS="0x$(echo "$GPU_PCI" | cut -d: -f2)"
+GPU_SLOT="0x$(echo "$GPU_PCI" | cut -d: -f3 | cut -d. -f1)"
+GPU_FUNC="0x$(echo "$GPU_PCI" | cut -d. -f2)"
+
 # Add GPU passthrough
 XML="${XML}
 
     <!-- GPU passthrough -->
     <hostdev mode='subsystem' type='pci' managed='yes'>
       <source>
-        <address domain='0x0000' bus='0x$(echo "$GPU_PCI" | cut -d: -f2 | cut -d. -f1)' slot='0x$(printf '%02x' "0x$(echo "$GPU_PCI" | cut -d: -f2 | cut -d. -f1 | sed 's/^0*//')" 2>/dev/null || echo "$(echo "$GPU_PCI" | cut -d: -f2 | cut -d. -f1)")' function='0x0'/>
+        <address domain='${GPU_DOMAIN}' bus='${GPU_BUS}' slot='${GPU_SLOT}' function='${GPU_FUNC}'/>
       </source>
-      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0' multifunction='on'/>
     </hostdev>"
 
 # Add audio device passthrough if available
 if [ -n "$AUDIO_PCI" ]; then
-    AUDIO_BUS=$(echo "$AUDIO_PCI" | cut -d: -f2 | cut -d. -f1)
-    AUDIO_SLOT=$(echo "$AUDIO_PCI" | cut -d: -f2 | cut -d. -f1)
-    AUDIO_FUNC=$(echo "$AUDIO_PCI" | cut -d. -f2)
-    AUDIO_SLOT_HEX=$(printf '0x%02x' "0x$AUDIO_SLOT" 2>/dev/null || echo "0x$AUDIO_SLOT")
-    AUDIO_FUNC_HEX=$(printf '0x%x' "0x$AUDIO_FUNC" 2>/dev/null || echo "0x$AUDIO_FUNC")
+    AUDIO_DOMAIN="0x0000"
+    AUDIO_BUS="0x$(echo "$AUDIO_PCI" | cut -d: -f2)"
+    AUDIO_SLOT="0x$(echo "$AUDIO_PCI" | cut -d: -f3 | cut -d. -f1)"
+    AUDIO_FUNC="0x$(echo "$AUDIO_PCI" | cut -d. -f2)"
 
     XML="${XML}
     <hostdev mode='subsystem' type='pci' managed='yes'>
       <source>
-        <address domain='0x0000' bus='0x${AUDIO_BUS}' slot='${AUDIO_SLOT_HEX}' function='${AUDIO_FUNC_HEX}'/>
+        <address domain='${AUDIO_DOMAIN}' bus='${AUDIO_BUS}' slot='${AUDIO_SLOT}' function='${AUDIO_FUNC}'/>
       </source>
-      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x1'/>
     </hostdev>"
 fi
 
 XML="${XML}
   </devices>
 
-  <seclabel type='dynamic' model='apparmor' relabel='yes'/>
+  <seclabel type='dynamic' relabel='yes'/>
 </domain>"
 
 # Output

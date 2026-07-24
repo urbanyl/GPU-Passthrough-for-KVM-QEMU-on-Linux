@@ -67,7 +67,7 @@ case "$DISTRO_ID" in
             bridge-utils \
             libguestfs \
             dnsmasq \
-            spice-spicevdagent
+            spice-vdagent
 
         echo ""
         echo -e "${GREEN}[Enabling services]${NC}"
