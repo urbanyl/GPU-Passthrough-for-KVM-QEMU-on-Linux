@@ -1,5 +1,8 @@
 #!/bin/bash
-# bind_vfio.sh -- Manually bind/unbind GPU to/from vfio-pci (for single-GPU passthrough)
+# bind_vfio.sh -- Manually bind/unbind GPU to/from vfio-pci
+# Supports: single-GPU passthrough AND AMD GPU dynamic late binding
+#   (RX 9000 series needs amdgpu init first; RX 6000/7000 benefits from it)
+#
 # Usage:
 #   sudo bash scripts/bind_vfio.sh unbind PCI_GPU PCI_AUDIO [VENDOR:DEVICE ...]
 #   sudo bash scripts/bind_vfio.sh rebind PCI_GPU PCI_AUDIO [DRIVER]
@@ -8,6 +11,13 @@
 #   sudo bash scripts/bind_vfio.sh unbind 0000:01:00.0 0000:01:00.1
 #   sudo bash scripts/bind_vfio.sh unbind 0000:01:00.0 0000:01:00.1 10de:1af2 10de:1af9
 #   sudo bash scripts/bind_vfio.sh rebind 0000:01:00.0 0000:01:00.1 nvidia
+#
+# AMD GPU note:
+#   For RX 9000 series, do NOT blacklist amdgpu or bind vfio-pci at boot.
+#   Let amdgpu init the GPU first, then run this script with "unbind" before
+#   starting the VM. The script will unbind from amdgpu and bind to vfio-pci.
+#   For dual-GPU setups, skip "rebind" after the VM — amdgpu will re-claim
+#   the device on next boot.
 #
 # WARNING: This script stops the display manager. Ensure SSH access before running.
 set -euo pipefail

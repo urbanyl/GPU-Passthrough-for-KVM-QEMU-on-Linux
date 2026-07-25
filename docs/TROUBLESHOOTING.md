@@ -10,6 +10,7 @@ Comprehensive troubleshooting guide for GPU passthrough issues.
 - [Black Screen After Driver Install](#black-screen-after-driver-install)
 - [NVIDIA Error Code 43](#nvidia-error-code-43)
 - [GPU Does Not Reset](#gpu-does-not-reset)
+- [AMD GPU Not Initializing in VM](#amd-gpu-not-initializing-in-vm)
 - [GPU Bound to Host After Reboot](#gpu-bound-to-host-after-reboot)
 - [VM is Slow or Stuttering](#vm-is-slow-or-stuttering)
 - [BSOD During Installation](#bsod-during-installation)
@@ -192,6 +193,65 @@ Known problematic models:
 ### Long-Term Solution
 
 Use a GPU model with proper FLR (Function Level Reset) support. Check the [VFIO GPU Reset Wiki](https://wiki.archlinux.org/title/PCI_passthrough_via_OVMF#GPU_does_not_reset) for your specific model.
+
+---
+
+## AMD GPU Not Initializing in VM
+
+### Symptoms
+
+- VM fails to start with GPU-related QEMU errors
+- `dmesg` in the host shows VFIO probing errors for the GPU
+- GPU works when bound to `amdgpu` but fails when bound to `vfio-pci` at boot
+- Common on **AMD RX 9000 series** GPUs
+
+### Cause
+
+Some AMD GPUs (particularly RDNA 4 / RX 9000 series) require `amdgpu` to initialize the GPU firmware and PCIe topology during boot. If `vfio-pci` claims the device before `amdgpu` can init it, the GPU stays in an uninitialized state and cannot be used by QEMU.
+
+### Fix: Use Dynamic Late Binding
+
+Instead of binding the GPU to `vfio-pci` at boot via kernel parameters, let `amdgpu` bind normally, then dynamically unbind/bind to `vfio-pci` just before starting the VM.
+
+**Option 1 — Manual (before starting VM):**
+```bash
+sudo bash scripts/bind_vfio.sh unbind 0000:01:00.0 0000:01:00.1
+sudo virsh start win11-gpu
+```
+
+**Option 2 — Libvirt hook (automatic):**
+```bash
+# /etc/libvirt/hooks/qemu
+#!/bin/bash
+VM_NAME="win11-gpu"
+GPU_ADDR="0000:01:00.0"
+GPU_AUDIO="0000:01:00.1"
+GPU_IDS="1002:XXXX,1002:XXXX"
+case "$1/$2" in
+  "$VM_NAME/prepare")
+    echo "$GPU_ADDR" > /sys/bus/pci/devices/$GPU_ADDR/driver/unbind 2>/dev/null
+    echo "$GPU_AUDIO" > /sys/bus/pci/devices/$GPU_AUDIO/driver/unbind 2>/dev/null
+    modprobe vfio-pci
+    for ID in $(echo "$GPU_IDS" | tr ',' ' '); do
+      echo "${ID%:*}" "${ID#*:}" > /sys/bus/pci/drivers/vfio-pci/new_id 2>/dev/null
+    done
+    echo "$GPU_ADDR" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null
+    echo "$GPU_AUDIO" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null
+    ;;
+esac
+```
+
+**Important:** Do NOT blacklist `amdgpu` or use `vfio-pci.ids` for these GPUs in your kernel parameters. Remove them from `/etc/modprobe.d/vfio.conf` and `/etc/default/grub`.
+
+### Verification
+
+```bash
+# After the hook/script runs:
+lspci -k -s 0000:01:00.0 | grep "Kernel driver in use"
+# Should show: vfio-pci
+```
+
+If the GPU is still bound to `amdgpu`, the unbind failed — check if another process is using the GPU.
 
 ---
 

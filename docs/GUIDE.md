@@ -44,6 +44,19 @@ sudo virt-install \
   --features kvm=hidden
 ```
 
+## AMD GPU Note (RX 9000+)
+
+RX 9000 series GPUs need `amdgpu` to initialize the card first — binding directly to `vfio-pci` at boot will leave the GPU uninitialized and the VM won't boot. RX 6000/7000 also benefit from this (amdgpu sets up ReBAR safely).
+
+Instead of `vfio-pci.ids=...` in Step 3, let `amdgpu` claim the GPU and use **dynamic late binding**:
+
+```bash
+# Before starting the VM (or via libvirt hook):
+sudo bash scripts/bind_vfio.sh unbind 0000:01:00.0 0000:01:00.1
+```
+
+See [README.md §6a](../README.md#6a-amd-gpu-dynamic-binding-late-binding) for libvirt hook integration.
+
 ## Key Files
 
 | File | Purpose |

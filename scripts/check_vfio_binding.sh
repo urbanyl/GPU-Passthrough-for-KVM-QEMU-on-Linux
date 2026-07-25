@@ -2,6 +2,12 @@
 # check_vfio_binding.sh -- Verify that the target GPU is bound to vfio-pci
 # Usage: sudo bash scripts/check_vfio_binding.sh [PCI_ADDRESS]
 #   If no PCI address is given, checks all VGA/3D controllers
+#
+# Note: If you are using AMD GPU dynamic late binding (RX 9000 series),
+# the GPU will be bound to amdgpu during normal host operation and only
+# switched to vfio-pci right before the VM starts. In that case, seeing
+# "amdgpu" here is expected — refer to the "AMD GPU Dynamic Binding"
+# section in the README.
 set -euo pipefail
 
 RED='\033[0;31m'
@@ -92,7 +98,11 @@ if $BINDING_OK; then
 else
     echo -e "  ${RED}Some devices are NOT bound to vfio-pci.${NC}"
     echo ""
-    echo "  Troubleshooting steps:"
+    echo "  If you are using AMD GPU dynamic late binding (RX 9000+),"
+    echo "  this is expected during normal operation — the GPU will be"
+    echo "  switched to vfio-pci right before the VM starts via libvirt hook."
+    echo ""
+    echo "  For standard early binding, troubleshoot:"
     echo "  1. Verify PCI IDs in /etc/modprobe.d/vfio.conf"
     echo "  2. Verify kernel parameters in /etc/default/grub"
     echo "  3. Rebuild initramfs: sudo update-initramfs -u"

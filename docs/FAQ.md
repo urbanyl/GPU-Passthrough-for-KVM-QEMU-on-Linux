@@ -36,7 +36,8 @@ Yes, but it is significantly more complex. You need scripts to stop the display 
 - RTX 40 series: Good support, check specific model reports
 
 **AMD:**
-- RX 6000 series and newer: Generally well-supported
+- RX 9000 series: Supported with dynamic binding (see [AMD GPU Dynamic Binding](../README.md#6a-amd-gpu-dynamic-binding-late-binding) in the main guide — requires amdgpu to init the card first, then late-bind to vfio-pci)
+- RX 6000/7000 series: Well-supported; dynamic binding recommended for proper ReBAR setup
 - RX 5000 series (RDNA 1): Supported, some reset issues
 - RX 500 series (Polaris): Known reset issues on some models
 
@@ -51,6 +52,14 @@ Yes. You need:
 ### Do I need two GPUs?
 
 Two GPUs are strongly recommended. One GPU runs the Linux host desktop, the other is passed through to the VM. Single-GPU passthrough works but is fragile and requires manual intervention on every VM start/stop.
+
+### Do I need dynamic binding for my AMD GPU?
+
+**RX 9000 series:** Yes, required. These GPUs must be initialized by `amdgpu` during boot, then dynamically unbound and bound to `vfio-pci` just before the VM starts. Binding directly to `vfio-pci` at boot will leave the GPU uninitialized and break the VM.
+
+**RX 6000 / 7000 series:** Not required, but recommended. When `amdgpu` initializes the card, it configures Resizable BAR (ReBAR) in a way that is safe for VFIO. This can improve guest GPU performance.
+
+See [§6a in the main guide](../README.md#6a-amd-gpu-dynamic-binding-late-binding) for setup instructions.
 
 ### Does motherboard model matter?
 

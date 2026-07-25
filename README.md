@@ -10,11 +10,22 @@
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
   <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
-  <img src="https://img.shields.io/badge/version-2.0.0-blue.svg" alt="Version 2.0.0">
+  <img src="https://img.shields.io/badge/version-2.1.0-blue.svg" alt="Version 2.1.0">
 </p>
 
 <details>
-<summary><strong>Changelog — v2.0.0 (July 2026)</strong></summary>
+<summary><strong>Changelog</strong></summary>
+
+**v2.1.0 (July 2026):**
+
+**Additions:**
+- Added instructions for AMD GPU dynamic binding: RX 9000 series GPUs require amdgpu to initialize the GPU first before dynamically unbinding and binding to vfio-pci; RX 6000 series GPUs benefit from amdgpu setting up ReBAR in a VFIO-safe way
+- Added `scripts/bind_vfio.sh` usage documentation for AMD GPU late-binding scenarios
+- Added AMD GPU considerations to hardware recommendations, FAQ, GUIDE, and troubleshooting
+
+---
+
+**v2.0.0 (July 2026):**
 
 **Fixes:**
 - Fixed invalid `--launchSecurity ovmf` in virt-install example (removed)
@@ -53,6 +64,7 @@
   - [4. Check IOMMU Groups](#4-check-iommu-groups)
   - [5. Configure Kernel Parameters](#5-configure-kernel-parameters)
   - [6. Configure VFIO](#6-configure-vfio)
+  - [6a. AMD GPU Dynamic Binding (Late Binding)](#6a-amd-gpu-dynamic-binding-late-binding)
   - [7. Verify VFIO Binding](#7-verify-vfio-binding)
   - [8. Install Virtualization Packages](#8-install-virtualization-packages)
   - [9. Create the Virtual Machine](#9-create-the-virtual-machine)
@@ -113,7 +125,7 @@ The goal is simple: give you a reproducible path from a bare Linux install to a 
 - **CPU**: Modern quad-core or better with 8+ threads (e.g., Intel 12th gen+, AMD Ryzen 5000+)
 - **RAM**: 32 GB DDR4/DDR5
 - **Storage**: NVMe SSD for the VM disk
-- **GPU (guest)**: NVIDIA RTX 30/40 series or AMD RX 6000/7000 series
+- **GPU (guest)**: NVIDIA RTX 30/40 series or AMD RX 6000/7000/9000 series
 - **GPU (host)**: Intel integrated graphics or any secondary GPU
 - **Motherboard**: Known good IOMMU grouping (check the [Level1Techs forum](https://forums.level1techs.com) or [r/VFIO](https://reddit.com/r/vfio) for your specific board)
 
@@ -473,6 +485,74 @@ sudo dracut --force
 
 ```bash
 sudo reboot
+```
+
+---
+
+### 6a. AMD GPU Dynamic Binding (Late Binding)
+
+Some AMD GPUs require special handling for VFIO passthrough:
+
+- **RX 9000 series (and newer)**: These GPUs **must** be bound to the `amdgpu` driver first during boot so the GPU firmware and PCIe topology are properly initialized. Binding directly to `vfio-pci` at boot (via `vfio-pci.ids`) will leave the GPU in an uninitialized state, and the VM will fail to boot with GPU errors.
+- **RX 6000 / 7000 series**: Not strictly required, but still beneficial — when `amdgpu` binds briefly at boot, it sets up Resizable BAR (ReBAR) in a way that is safe for VFIO. This can improve guest GPU performance.
+
+**How it works:**
+
+Instead of binding the GPU to `vfio-pci` at boot (Step 5–6), you let `amdgpu` claim the device normally, then **dynamically unbind** it from `amdgpu` and **bind** it to `vfio-pci` just before starting the VM.
+
+If you are on a **dual-GPU setup** and only need this for the passthrough GPU, you can use a **libvirt hook** to automate the unbind/bind when the VM starts:
+
+```bash
+# /etc/libvirt/hooks/qemu
+#!/bin/bash
+
+VM_NAME="win11-gpu"
+GPU_ADDR="0000:01:00.0"
+GPU_AUDIO="0000:01:00.1"
+GPU_IDS="1002:XXXX,1002:XXXX"   # Replace with your GPU vendor:device IDs
+
+case "$1" in
+  "$VM_NAME")
+    case "$2" in
+      prepare)
+        # Stop display manager if using the same GPU for host display
+        # systemctl stop gdm
+        # Unbind from amdgpu
+        echo "$GPU_ADDR" > /sys/bus/pci/devices/$GPU_ADDR/driver/unbind 2>/dev/null
+        echo "$GPU_AUDIO" > /sys/bus/pci/devices/$GPU_AUDIO/driver/unbind 2>/dev/null
+        # Bind to vfio-pci
+        modprobe vfio-pci
+        for ID in $(echo "$GPU_IDS" | tr ',' ' '); do
+          VENDOR=$(echo "$ID" | cut -d: -f1)
+          DEVICE=$(echo "$ID" | cut -d: -f2)
+          echo "$VENDOR $DEVICE" > /sys/bus/pci/drivers/vfio-pci/new_id 2>/dev/null || true
+        done
+        echo "$GPU_ADDR" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || true
+        echo "$GPU_AUDIO" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || true
+        ;;
+    esac
+    ;;
+esac
+```
+
+Make it executable:
+```bash
+sudo chmod +x /etc/libvirt/hooks/qemu
+```
+
+Alternatively, use the bundled bind script before starting the VM manually:
+
+```bash
+sudo bash scripts/bind_vfio.sh unbind 0000:01:00.0 0000:01:00.1
+```
+
+> **Note:** This is the same bind script used for single-GPU passthrough, but here it is used in a dual-GPU context specifically to let `amdgpu` initialize the card first. After the VM shuts down, the GPU will fall back to `amdgpu` automatically on next boot (since `vfio-pci` is not loaded early).
+
+**Verification:** After the hook runs (or after running the bind script), verify the GPU is bound to `vfio-pci`:
+
+```bash
+lspci -k -s 0000:01:00.0 | grep "Kernel driver in use"
+# Should show: vfio-pci
 ```
 
 ---
@@ -955,7 +1035,7 @@ This repository includes helper scripts for common tasks:
 | `scripts/detect_gpu.sh` | Detects GPUs and displays vendor:device IDs |
 | `scripts/check_iommu_groups.sh` | Lists all IOMMU groups and their devices |
 | `scripts/check_vfio_binding.sh` | Verifies the GPU is bound to vfio-pci |
-| `scripts/bind_vfio.sh` | Manually binds/unbinds GPU to VFIO (single-GPU) |
+| `scripts/bind_vfio.sh` | Manually binds/unbinds GPU to VFIO (single-GPU or AMD dynamic binding) |
 | `scripts/install_packages.sh` | Installs all required virtualization packages |
 | `scripts/generate_vm_xml.sh` | Generates a starter VM XML with optimal settings |
 
@@ -968,6 +1048,8 @@ All scripts require root privileges where noted. Run with `sudo bash scripts/<sc
 Single-GPU passthrough is an advanced setup where the same GPU is used for the host desktop and the VM. The GPU is unbound from the host driver, passed to the VM, and recovered when the VM shuts down.
 
 **This is significantly more complex than dual-GPU passthrough.**
+
+> **AMD GPU note:** If you are using an AMD RX 9000 series GPU (or want the ReBAR benefit on RX 6000/7000), single-GPU passthrough already does dynamic unbind/bind via `bind_vfio.sh`, which naturally satisfies the requirement of letting `amdgpu` initialize the card first. Simply run the script as described below — no extra configuration needed.
 
 ### Requirements
 
@@ -1006,13 +1088,18 @@ VM_NAME="win11-gpu"
 GPU_ADDR="0000:01:00.0"
 GPU_AUDIO="0000:01:00.1"
 
+# For AMD GPUs (especially RX 9000+), skip unloading amdgpu here.
+# The GPU needs amdgpu to init first; the unbind below is sufficient
+# to release it for vfio-pci.
+
 case "$1" in
   "$VM_NAME")
     case "$2" in
       prepare)
         systemctl stop display-manager
         modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia
-        modprobe -r amdgpu
+        # Do NOT modprobe -r amdgpu for AMD passthrough GPUs —
+        # let amdgpu init the card, then just unbind
         echo "$GPU_ADDR" > /sys/bus/pci/devices/$GPU_ADDR/driver/unbind 2>/dev/null
         echo "$GPU_AUDIO" > /sys/bus/pci/devices/$GPU_AUDIO/driver/unbind 2>/dev/null
         echo "10de 1af2" > /sys/bus/pci/drivers/vfio-pci/new_id
@@ -1063,7 +1150,7 @@ For the complete FAQ, see [`docs/FAQ.md`](docs/FAQ.md).
 
 **Highlights:**
 - **Single-GPU passthrough?** Possible but complex — see the [Single-GPU Passthrough](#single-gpu-passthrough) section.
-- **Which GPU to buy?** NVIDIA RTX 30/40 series and AMD RX 6000/7000 series are well-supported.
+- **Which GPU to buy?** NVIDIA RTX 30/40 series and AMD RX 6000/7000/9000 series are well-supported.
 - **Do I need to pass through audio too?** Yes, include the `.1` audio function.
 - **Performance overhead?** 2-5% GPU, negligible CPU/storage/network with proper tuning.
 - **Secure Boot?** Generally no — disable it in BIOS.
