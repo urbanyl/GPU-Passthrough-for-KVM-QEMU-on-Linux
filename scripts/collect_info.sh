@@ -7,7 +7,6 @@
 set -euo pipefail
 
 RED='\033[0;31m'
-GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
@@ -36,8 +35,8 @@ uname -a
 cmd "cmdline" cat /proc/cmdline
 
 if [ -d /sys/kernel/iommu_groups ]; then
-    GROUPS=$(find /sys/kernel/iommu_groups -mindepth 1 -maxdepth 1 -type d | wc -l)
-    echo "IOMMU groups: $GROUPS"
+    NUM_GROUPS=$(find /sys/kernel/iommu_groups -mindepth 1 -maxdepth 1 -type d | wc -l)
+    echo "IOMMU groups: $NUM_GROUPS"
 else
     echo "[${RED}IOMMU OFF${NC}] /sys/kernel/iommu_groups does not exist"
 fi
@@ -67,7 +66,12 @@ fi
 echo ""
 echo "--- Modules ---"
 cmd "vfio modules" lsmod | grep -E '^(vfio|vfio_pci|vfio_iommu)' || echo "no vfio modules loaded"
-cmd "modprobe.d" cat /etc/modprobe.d/*.conf 2>/dev/null || echo "no modprobe.d/*.conf"
+echo "--- modprobe.d ---"
+if compgen -G "/etc/modprobe.d/*.conf" > /dev/null; then
+    cat /etc/modprobe.d/*.conf
+else
+    echo "no modprobe.d/*.conf"
+fi
 
 echo ""
 echo "--- vfio-pci binding ---"
@@ -85,8 +89,11 @@ echo ""
 echo "--- libvirt / qemu ---"
 cmd "virsh version" virsh version
 cmd "virsh list --all" virsh list --all
-if [ -d /etc/libvirt ]; then
-    cmd "qemu.conf" cat /etc/libvirt/qemu.conf 2>/dev/null | grep -vE '^\s*#|^\s*$' || echo "empty qemu.conf"
+echo "--- qemu.conf ---"
+if [ -f /etc/libvirt/qemu.conf ]; then
+    grep -vE '^\s*#|^\s*$' /etc/libvirt/qemu.conf || echo "empty qemu.conf"
+else
+    echo "[${YELLOW}missing${NC}] /etc/libvirt/qemu.conf"
 fi
 
 echo ""
