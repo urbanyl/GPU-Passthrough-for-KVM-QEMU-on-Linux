@@ -1,0 +1,8 @@
+<!-- virtiofs shared folder between host and guest.
+     Change source dir to your real host path. In the guest:
+     sudo mkdir -p /mnt/shared && sudo mount -t virtiofs shared /mnt/shared -->
+<filesystem type='mount' accessmode='passthrough'>
+  <driver type='virtiofs'/>
+  <source dir='/home/you/shared'/>
+  <target dir='shared'/>
+</filesystem>

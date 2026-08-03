@@ -9,6 +9,8 @@
 #   --disk PATH           Path to disk image (default: /var/lib/libvirt/images/win11.qcow2)
 #   --iso PATH            Path to Windows ISO
 #   --virtio-iso PATH     Path to VirtIO ISO
+#   --tpm                 Add an emulated TPM 2.0 (required by Windows 11)
+#   --shmem SIZE_MB       Add a Looking Glass shared memory device (default 64)
 #   --output PATH         Output file (default: stdout)
 set -euo pipefail
 
@@ -22,6 +24,8 @@ DISK_PATH="/var/lib/libvirt/images/win11.qcow2"
 WIN_ISO=""
 VIRTIO_ISO=""
 OUTPUT=""
+VM_TPM="no"
+SHMEM_MB=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -34,6 +38,8 @@ while [ $# -gt 0 ]; do
         --disk)     DISK_PATH="$2"; shift 2 ;;
         --iso)      WIN_ISO="$2"; shift 2 ;;
         --virtio-iso) VIRTIO_ISO="$2"; shift 2 ;;
+        --tpm)      VM_TPM="yes"; shift ;;
+        --shmem)    SHMEM_MB="${2:-64}"; shift 2 ;;
         --output)   OUTPUT="$2"; shift 2 ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
@@ -47,6 +53,8 @@ while [ $# -gt 0 ]; do
             echo "  --disk PATH           Disk image path"
             echo "  --iso PATH            Windows ISO path"
             echo "  --virtio-iso PATH     VirtIO ISO path"
+            echo "  --tpm                 Add emulated TPM 2.0 (Windows 11)"
+            echo "  --shmem MB            Add Looking Glass shared memory device"
             echo "  --output PATH         Output file (default: stdout)"
             exit 0
             ;;
@@ -219,6 +227,27 @@ if [ -n "$AUDIO_PCI" ]; then
         <address domain='${AUDIO_DOMAIN}' bus='${AUDIO_BUS}' slot='${AUDIO_SLOT}' function='${AUDIO_FUNC}'/>
       </source>
     </hostdev>"
+fi
+
+# Add TPM 2.0 if requested (Windows 11 requires it)
+if [ "$VM_TPM" = "yes" ]; then
+    XML="${XML}
+
+    <!-- Emulated TPM 2.0 (Windows 11 requirement) -->
+    <tpm model='tpm-crb'>
+      <backend type='emulator' version='2.0'/>
+    </tpm>"
+fi
+
+# Add Looking Glass shared memory device if requested
+if [ -n "$SHMEM_MB" ]; then
+    XML="${XML}
+
+    <!-- Looking Glass shared memory device -->
+    <shmem name='looking-glass'>
+      <model type='ivshmem-plain'/>
+      <size unit='M'>${SHMEM_MB}</size>
+    </shmem>"
 fi
 
 XML="${XML}

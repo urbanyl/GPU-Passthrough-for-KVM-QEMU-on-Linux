@@ -1,0 +1,8 @@
+<!-- Attach a specific USB device to the VM at boot.
+     Find your IDs with: lsusb -->
+<hostdev mode='subsystem' type='usb' managed='yes'>
+  <source>
+    <vendor id='0x046d'/>
+    <product id='0xc539'/>
+  </source>
+</hostdev>

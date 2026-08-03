@@ -1,0 +1,9 @@
+<!-- Physical keyboard/mouse passed to the guest via evdev.
+     Replace /dev/input/by-id/... with your devices (ls -l /dev/input/by-id/).
+     Requires the udev rule: examples/udev/60-qemu-input.rules -->
+<input type='evdev'>
+  <source dev='/dev/input/by-id/usb-046d_c52b_event-kbd' grab='all'/>
+</input>
+<input type='evdev'>
+  <source dev='/dev/input/by-id/usb-046d_c077_event-mouse' grab='all'/>
+</input>

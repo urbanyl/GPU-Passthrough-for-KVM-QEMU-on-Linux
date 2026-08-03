@@ -1,0 +1,5 @@
+<!-- Shared memory device for Looking Glass guest output capture -->
+<shmem name='looking-glass'>
+  <model type='ivshmem-plain'/>
+  <size unit='M'>64</size>
+</shmem>

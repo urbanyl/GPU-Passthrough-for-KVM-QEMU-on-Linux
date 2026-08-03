@@ -1,0 +1,14 @@
+[Unit]
+Description=Autostart win11-gpu VM at boot
+After=libvirtd.service network-online.target
+Wants=libvirtd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/virsh start win11-gpu
+ExecStop=/usr/bin/virsh shutdown win11-gpu
+ExecStopPost=/usr/bin/virsh destroy win11-gpu
+
+[Install]
+WantedBy=multi-user.target

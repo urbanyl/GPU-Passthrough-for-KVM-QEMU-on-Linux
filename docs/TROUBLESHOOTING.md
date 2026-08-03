@@ -4,6 +4,8 @@ Comprehensive troubleshooting guide for GPU passthrough issues.
 
 > **Specialized troubleshooting:** input devices → [INPUT_PASSTHROUGH.md](INPUT_PASSTHROUGH.md) · USB → [USB_PASSTHROUGH.md](USB_PASSTHROUGH.md) · audio → [AUDIO.md](AUDIO.md) · networking → [NETWORKING.md](NETWORKING.md) · performance → [PERFORMANCE.md](PERFORMANCE.md) · backups → [SNAPSHOTS_BACKUPS.md](SNAPSHOTS_BACKUPS.md)
 
+> **Stuck and posting for help?** Run `bash scripts/collect_info.sh` and paste the whole output in your support thread. It dumps kernel cmdline, IOMMU groups, vfio binding, hugepages, and libvirt state in one go.
+
 ---
 
 ## Table of Contents

@@ -10,11 +10,30 @@
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
   <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
-  <img src="https://img.shields.io/badge/version-3.0.1-blue.svg" alt="Version 3.0.1">
+  <img src="https://img.shields.io/badge/version-3.1.0-blue.svg" alt="Version 3.1.0">
 </p>
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+**v3.1.0 (August 2026):**
+
+**Additions (scripts):**
+- `scripts/collect_info.sh` — dumps every diagnostic people ask for on r/VFIO in one shot. Run it before posting a support thread and paste the output.
+- `scripts/snapshot_vm.sh` — create/list/revert/delete VM snapshots with one command
+
+**Additions (documentation):**
+- `docs/ARCHITECTURE.md` — how the QEMU/KVM/VFIO/IOMMU stack actually fits together
+- `docs/HOST_GPU.md` — keeping a working display (iGPU, second GPU, headless) while your GPU is in the VM
+
+**Additions (examples + CI):**
+- Real XML snippet files in `examples/xml/` (Looking Glass, evdev input, virtiofs, USB, PCI) — previously only shown inline
+- `examples/systemd/autostart-vm.service` — optional VM autostart at boot
+- `.github/workflows/shellcheck.yml` — every PR/push gets shellchecked
+
+**Improvements:**
+- `generate_vm_xml.sh` now supports `--tpm` (emulated TPM 2.0, Windows 11) and `--shmem` (Looking Glass shared memory)
+- `TROUBLESHOOTING.md` and `SNAPSHOTS_BACKUPS.md` reference the new scripts
 
 **v3.0.1 (August 2026):**
 
@@ -1085,6 +1104,8 @@ This repository is more than a single walkthrough. Specialized guides live in `d
 
 | Guide | Covers |
 |-------|--------|
+| [GUIDE.md](docs/GUIDE.md) | The step-by-step setup, start to finish |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the QEMU/KVM/VFIO/IOMMU stack actually fits together |
 | [PERFORMANCE.md](docs/PERFORMANCE.md) | CPU pinning, huge pages, iothreads, IRQ tuning, benchmarking |
 | [GAMING_OPTIMIZATIONS.md](docs/GAMING_OPTIMIZATIONS.md) | Gaming-focused host/guest tweaks, NVIDIA/AMD settings, anti-cheat notes |
 | [LINUX_GUESTS.md](docs/LINUX_GUESTS.md) | Running Linux (not Windows) inside the VM, virtiofs, Wayland |
@@ -1094,6 +1115,7 @@ This repository is more than a single walkthrough. Specialized guides live in `d
 | [STORAGE.md](docs/STORAGE.md) | qcow2 vs raw, disk buses, cache modes, snapshots |
 | [NETWORKING.md](docs/NETWORKING.md) | NAT, bridging, macvtap, VirtIO multi-queue, firewalls |
 | [REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) | Looking Glass, Sunshine/Moonlight, Parsec, RDP, SPICE |
+| [HOST_GPU.md](docs/HOST_GPU.md) | Keeping a working display (iGPU, second GPU, headless) while your GPU is in the VM |
 | [HARDWARE_DATABASE.md](docs/HARDWARE_DATABASE.md) | CPU/GPU/motherboard compatibility and known issues |
 | [SECURITY.md](docs/SECURITY.md) | ACS override risks, SELinux/AppArmor, guest isolation |
 | [UPGRADING.md](docs/UPGRADING.md) | Surviving kernel, distro, BIOS, and driver updates |
@@ -1125,6 +1147,8 @@ This repository includes helper scripts for common tasks:
 | `scripts/setup_hugepages.sh` | Configures huge pages (host + VM XML) |
 | `scripts/backup_vm.sh` | Full VM backup (disk + XML + NVRAM) |
 | `scripts/restore_vm.sh` | Restores a VM from a backup |
+| `scripts/snapshot_vm.sh` | Create/list/revert/delete VM snapshots |
+| `scripts/collect_info.sh` | Dumps all diagnostics for a support thread |
 
 All scripts require root privileges where noted. Run with `sudo bash scripts/<script>.sh`.
 
@@ -1257,8 +1281,13 @@ gpu-passthrough-kvm/
 |-- .shellcheckrc                     # ShellCheck project rules
 |-- install.sh                        # Environment verification
 
+|-- .github/
+|   `-- workflows/
+|       `-- shellcheck.yml            # CI: shellcheck every PR/push
+
 |-- docs/
 |   |-- GUIDE.md                      # Condensed quick-reference guide
+|   |-- ARCHITECTURE.md               # How the QEMU/KVM/VFIO/IOMMU stack fits together
 |   |-- TROUBLESHOOTING.md            # Extended troubleshooting reference
 |   |-- FAQ.md                        # Frequently asked questions
 |   |-- PERFORMANCE.md                # CPU/memory/storage/network/GPU tuning
@@ -1270,6 +1299,7 @@ gpu-passthrough-kvm/
 |   |-- STORAGE.md                    # Disk formats, buses, cache modes, backups
 |   |-- NETWORKING.md                 # NAT, bridges, macvtap, multi-queue
 |   |-- REMOTE_ACCESS.md              # Looking Glass, Sunshine, Parsec, RDP
+|   |-- HOST_GPU.md                   # iGPU/second GPU/headless host display
 |   |-- HARDWARE_DATABASE.md          # CPU/GPU/motherboard compatibility
 |   |-- SECURITY.md                   # ACS override, SELinux/AppArmor, hardening
 |   |-- UPGRADING.md                  # Kernel/distro/BIOS update survival
@@ -1291,7 +1321,9 @@ gpu-passthrough-kvm/
 |   |-- stop_vm.sh                    # VM stop wrapper (+GPU rebind)
 |   |-- setup_hugepages.sh            # Huge page configuration
 |   |-- backup_vm.sh                  # VM backup (disk+XML+NVRAM)
-|   `-- restore_vm.sh                 # VM restore
+|   |-- restore_vm.sh                 # VM restore
+|   |-- snapshot_vm.sh                # VM snapshot create/list/revert/delete
+|   `-- collect_info.sh               # Diagnostic dump for support threads
 
 |-- setup/
 |   |-- debian-ubuntu.sh              # Debian/Ubuntu host setup
@@ -1306,9 +1338,15 @@ gpu-passthrough-kvm/
     |-- udev/
     |   `-- 60-qemu-input.rules       # evdev input permissions
     |-- systemd/
-    |   `-- hugepages.service         # Huge page reservation service
+    |   |-- hugepages.service         # Huge page reservation service
+    |   `-- autostart-vm.service      # Optional VM autostart at boot
     `-- xml/
-        `-- README.md                 # Ready-to-paste VM XML snippets
+        |-- README.md                 # Ready-to-paste VM XML snippets
+        |-- looking-glass.xml         # LG shared memory device
+        |-- input-evdev.xml           # Physical input passthrough
+        |-- virtiofs.xml              # Shared folder
+        |-- usb-device.xml            # USB device passthrough
+        `-- pci-hostdev.xml           # Single PCI function passthrough
 ```
 
 ---

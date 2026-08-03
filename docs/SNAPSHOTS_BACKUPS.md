@@ -99,6 +99,17 @@ sudo virsh snapshot-create-as win11-gpu "working" --disk-only --atomic --diskspe
 
 For most users: **external snapshots** for live backups, internal snapshots for simple rollback points.
 
+The bundled `scripts/snapshot_vm.sh` wraps the common operations:
+
+```bash
+bash scripts/snapshot_vm.sh list win11-gpu
+bash scripts/snapshot_vm.sh create win11-gpu pre-driver-update
+bash scripts/snapshot_vm.sh revert win11-gpu pre-driver-update
+bash scripts/snapshot_vm.sh delete win11-gpu pre-driver-update
+```
+
+Internal snapshots live inside the qcow2, so the image keeps growing while they exist — `delete` them when you're done testing.
+
 ---
 
 ## Automation
