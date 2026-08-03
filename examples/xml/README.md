@@ -6,16 +6,47 @@ Ready-to-paste blocks for your domain XML (`sudo virsh edit <vm>`). Adapt paths,
 
 ## Shared Memory Device (Looking Glass)
 
-Adds the IVSHMEM device Looking Glass uses to capture the guest GPU output.
+The Looking Glass project **recommends the KVMFR kernel module** for the shared
+memory device — it gives DMA transfers, which are critical when your host runs
+on an iGPU. The plain `ivshmem-plain` shmem device is considered legacy and
+only supported for special edge cases (e.g. VM-to-VM).
 
-**File:** `looking-glass.xml`
+**File:** `looking-glass.xml` — KVMFR commandline block
 
 ```xml
-<shmem name='looking-glass'>
-  <model type='ivshmem-plain'/>
-  <size unit='M'>64</size>
-</shmem>
+<qemu:commandline>
+  <qemu:arg value='-device'/>
+  <qemu:arg value='{"driver":"ivshmem-plain","id":"shmem0","memdev":"looking-glass"}'/>
+  <qemu:arg value='-object'/>
+  <qemu:arg value='{"qom-type":"memory-backend-file","id":"looking-glass","mem-path":"/dev/kvmfr0","size":33554432,"share":true}'/>
+</qemu:commandline>
 ```
+
+The `<domain>` element must carry the QEMU namespace for this to parse:
+
+```xml
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+```
+
+**Prerequisites:**
+
+```bash
+# 1. Load the kvmfr module (32 MiB = 33554432 bytes, adjust to your resolution)
+echo "options kvmfr static_size_mb=32" | sudo tee /etc/modprobe.d/kvmfr.conf
+sudo modprobe kvmfr
+
+# 2. Let QEMU open /dev/kvmfr0
+#    /etc/libvirt/qemu.conf: uncomment cgroup_device_acl and add "/dev/kvmfr0"
+#    AppArmor: echo "/dev/kvmfr0 rw," >> /etc/apparmor.d/local/abstractions/libvirt-qemu
+sudo systemctl restart libvirtd
+```
+
+**Official docs (always current):**
+- https://looking-glass.io/docs/stable
+- https://looking-glass.io/docs/bleeding
+- KVMFR setup: https://looking-glass.io/docs/B7/ivshmem_kvmfr/
+
+**Size formula** (must match `static_size_mb`): `(width × height × pixel size × 2) / 1 MiB + 10 MiB`, where pixel size is 4 for SDR or 8 for HDR.
 
 ## evdev Input Passthrough
 
@@ -90,6 +121,7 @@ Pass a single PCI function. `0000:01:00.0` and `0000:01:00.1` are the GPU and it
 |---------|--------------|
 | Any `<devices>` snippet | Paste inside the `<devices>` element, then `virsh start <vm>` |
 | `<memoryBacking>` | Paste before the `<os>` element |
+| `<qemu:commandline>` (Looking Glass) | Paste after the `</devices>` element; add the `xmlns:qemu` namespace to `<domain>` |
 
 After editing, validate:
 

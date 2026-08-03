@@ -33,16 +33,45 @@ Every way to see and use your GPU passthrough VM from a distance, compared and c
 
 The best option when the VM runs on the same machine you sit at: captures the GPU output via shared memory and renders it on the host with minimal overhead.
 
-**1. Add the shared memory device to the VM XML:**
+> **Follow the official docs.** They are always current, cover both stable and bleeding-edge builds, and this summary is only a starting point:
+> - https://looking-glass.io/docs/stable
+> - https://looking-glass.io/docs/bleeding
+>
+> **Important:** the Looking Glass project recommends the **KVMFR kernel module** for the shared memory device — it uses your GPU's DMA engine, which matters especially on iGPU hosts. Plain `ivshmem-plain` shmem is legacy/deprecated and only kept for special cases (VM-to-VM). Setup: https://looking-glass.io/docs/B7/ivshmem_kvmfr/
+
+**1. Add the shared memory device to the VM XML (KVMFR method):**
 
 ```xml
-<shmem name='looking-glass'>
-  <model type='ivshmem-plain'/>
-  <size unit='M'>64</size>
-</shmem>
+<qemu:commandline>
+  <qemu:arg value='-device'/>
+  <qemu:arg value='{"driver":"ivshmem-plain","id":"shmem0","memdev":"looking-glass"}'/>
+  <qemu:arg value='-object'/>
+  <qemu:arg value='{"qom-type":"memory-backend-file","id":"looking-glass","mem-path":"/dev/kvmfr0","size":33554432,"share":true}'/>
+</qemu:commandline>
 ```
 
-**2. Host:** build/install looking-glass-client ([looking-glass.io](https://looking-glass.io), GitHub [gnif/LookingGlass](https://github.com/gnif/LookingGlass)):
+Your `<domain>` element needs the QEMU namespace:
+
+```xml
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+```
+
+**2. Host prerequisites (once):**
+
+```bash
+# Load the kvmfr module; 32 MiB fits 1080p, use the official formula for higher res
+echo "options kvmfr static_size_mb=32" | sudo tee /etc/modprobe.d/kvmfr.conf
+sudo modprobe kvmfr
+
+# Let QEMU open /dev/kvmfr0
+#   /etc/libvirt/qemu.conf  -> cgroup_device_acl += "/dev/kvmfr0"
+#   AppArmor: echo "/dev/kvmfr0 rw," >> /etc/apparmor.d/local/abstractions/libvirt-qemu
+sudo systemctl restart libvirtd
+```
+
+The size formula from the docs: `(width × height × pixel size × 2) / 1 MiB + 10 MiB`, with pixel size 4 (SDR) or 8 (HDR). The `size` value in the XML (bytes) must match `static_size_mb`.
+
+**3. Host:** build/install looking-glass-client ([looking-glass.io](https://looking-glass.io), GitHub [gnif/LookingGlass](https://github.com/gnif/LookingGlass)):
 
 ```bash
 git clone --recursive https://github.com/gnif/LookingGlass.git
@@ -53,16 +82,16 @@ make -j$(nproc)
 # run: ./looking-glass-client
 ```
 
-**3. Guest:** install the Windows client and (optionally) the IVSHMEM driver if prompted.
+**4. Guest:** install the Windows client and, when it asks, the IVSHMEM driver if not already present.
 
-**4. Run:**
+**5. Run:**
 
 ```bash
 cd LookingGlass/build
 ./looking-glass-client
 ```
 
-**Troubleshooting:** `Unable to start server` usually means the `<shmem>` block is missing or the IVSHMEM driver is not installed in the guest. `Fatal: no shared memory` means the VM didn't get the shmem device (reboot it).
+**Troubleshooting:** `Unable to start server` usually means the shared memory block is missing or the IVSHMEM driver is not installed in the guest. `Fatal: no shared memory` means the VM didn't get the shmem device (reboot it). Missing `/dev/kvmfr0` means the module isn't loaded or QEMU can't open it (check cgroup/AppArmor). For anything else, read the official docs first — they are the source of truth.
 
 ---
 

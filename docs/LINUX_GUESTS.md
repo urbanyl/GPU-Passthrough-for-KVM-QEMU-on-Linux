@@ -110,7 +110,7 @@ Wayland works fine inside the guest. The passthrough GPU is treated like any oth
 Because Linux guests render natively to the passed GPU, you have three ways to see the screen:
 
 1. **Physical monitor** on the passed GPU (like Windows)
-2. **Looking Glass** — works identically to Windows; the guest just needs the `ivshmem` shmem device (add it to the XML, no guest driver needed on Linux)
+2. **Looking Glass** — works identically to Windows. Use the KVMFR setup the project recommends (see [REMOTE_ACCESS.md](REMOTE_ACCESS.md#looking-glass-local-near-zero-latency) and the [official docs](https://looking-glass.io/docs/stable)); Linux guests need no extra guest driver for the shared memory
 3. **SPICE + virtio GPU** — before the GPU drivers take over; the `virgl` accel in `virtio-vga` provides a working fallback console
 
 Recommended XML for a Linux guest that uses both SPICE (setup) and the passed GPU (runtime):

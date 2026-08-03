@@ -1,5 +1,22 @@
-<!-- Shared memory device for Looking Glass guest output capture -->
-<shmem name='looking-glass'>
-  <model type='ivshmem-plain'/>
-  <size unit='M'>64</size>
-</shmem>
+<!-- Looking Glass shared memory using the KVMFR kernel module (recommended by
+     the Looking Glass project — DMA transfers, essential with an iGPU host).
+
+     Requirements:
+     1. Load the kvmfr module with a static size (32 MiB):
+        # echo "options kvmfr static_size_mb=32" > /etc/modprobe.d/kvmfr.conf
+        # modprobe kvmfr
+     2. Allow QEMU to open /dev/kvmfr0:
+        - cgroups:  /etc/libvirt/qemu.conf -> cgroup_device_acl add "/dev/kvmfr0"
+        - AppArmor: /etc/apparmor.d/local/abstractions/libvirt-qemu add "/dev/kvmfr0 rw,"
+     3. The <domain> element MUST carry xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'
+        for the qemu:commandline block below to parse.
+
+     Full docs: https://looking-glass.io/docs/stable
+     KVMFR setup: https://looking-glass.io/docs/B7/ivshmem_kvmfr/
+     Size formula (resolution dependent): https://looking-glass.io/docs/stable/ivshmem_kvmfr/ -->
+<qemu:commandline>
+  <qemu:arg value='-device'/>
+  <qemu:arg value='{"driver":"ivshmem-plain","id":"shmem0","memdev":"looking-glass"}'/>
+  <qemu:arg value='-object'/>
+  <qemu:arg value='{"qom-type":"memory-backend-file","id":"looking-glass","mem-path":"/dev/kvmfr0","size":33554432,"share":true}'/>
+</qemu:commandline>

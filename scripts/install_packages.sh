@@ -24,7 +24,7 @@ else
     exit 1
 fi
 
-echo "Detected distribution: $PRETTY_NAME"
+echo "Detected distribution: ${PRETTY_NAME:-$DISTRO_ID}"
 echo ""
 
 case "$DISTRO_ID" in

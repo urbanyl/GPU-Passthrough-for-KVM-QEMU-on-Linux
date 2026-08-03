@@ -10,11 +10,21 @@
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
   <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
-  <img src="https://img.shields.io/badge/version-3.1.0-blue.svg" alt="Version 3.1.0">
+  <img src="https://img.shields.io/badge/version-3.1.1-blue.svg" alt="Version 3.1.1">
 </p>
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+**v3.1.1 (August 2026):**
+
+**Corrections (following feedback from the Looking Glass maintainers):**
+- Looking Glass now documents the **KVMFR kernel module** as the recommended shared-memory setup (DMA, required for usable iGPU-host performance). `ivshmem-plain` is legacy/deprecated except for edge cases. Corrected `docs/REMOTE_ACCESS.md`, `examples/xml/looking-glass.xml`, and `examples/xml/README.md` to recommend KVMFR and link the official docs.
+- Removed the `--shmem` option from `scripts/generate_vm_xml.sh` — it generated the deprecated `ivshmem-plain` shmem block. The XML generator now only does `--tpm`; LG is configured via `examples/xml/looking-glass.xml` instead.
+- Updated the script table/changelog wording accordingly.
+
+**Fixes (CI):**
+- Fixed a ShellCheck SC2154 warning in `scripts/install_packages.sh` (`$PRETTY_NAME` not assigned) by sourcing `/etc/os-release` and using `${PRETTY_NAME:-$DISTRO_ID}`. Also fixed SC2034/SC2178 in `scripts/collect_info.sh`.
 
 **v3.1.0 (August 2026):**
 
@@ -32,7 +42,7 @@
 - `.github/workflows/shellcheck.yml` — every PR/push gets shellchecked
 
 **Improvements:**
-- `generate_vm_xml.sh` now supports `--tpm` (emulated TPM 2.0, Windows 11) and `--shmem` (Looking Glass shared memory)
+- `generate_vm_xml.sh` now supports `--tpm` (emulated TPM 2.0, Windows 11)
 - `TROUBLESHOOTING.md` and `SNAPSHOTS_BACKUPS.md` reference the new scripts
 
 **v3.0.1 (August 2026):**
