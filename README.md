@@ -10,11 +10,24 @@
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
   <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
-  <img src="https://img.shields.io/badge/version-3.1.1-blue.svg" alt="Version 3.1.1">
+  <img src="https://img.shields.io/badge/version-3.2.0-blue.svg" alt="Version 3.2.0">
 </p>
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+**v3.2.0 (August 2026):**
+
+**Additions (management tooling — the repo is now drivable, not just readable):**
+- `scripts/vmctl.sh` — unified VM lifecycle controller (`status`/`start`/`stop`/`reboot`/`attach-gpu`/`detach-gpu`/`info`) building on the existing helper scripts
+- `scripts/gpu_recovery.sh` — recovers a stuck GPU after a VM crash (force-unbind → PCI reset quirk → rebind)
+- `Makefile` at the repo root — `make status`, `make vm-start`, `make backup`, `make info`, etc. with overridable `VM=`/`GPU=`/`DEST=`/`SRC=`
+- `docs/MANAGEMENT.md` — reference for all of the above
+- `collect_info.sh` and `snapshot_vm.sh` now documented in the README script table + `docs/MANAGEMENT.md`
+
+**Changes:**
+- New "Management Tools" section in the README with a `vmctl.sh` command table
+- Version badge bumped to 3.2.0
 
 **v3.1.1 (August 2026):**
 
@@ -135,11 +148,12 @@
   - [10. Optimize the VM Configuration](#10-optimize-the-vm-configuration)
   - [11. Install Windows](#11-install-windows)
   - [12. Install GPU Drivers in the Guest](#12-install-gpu-drivers-in-the-guest)
-  - [13. Set Up Remote Display Access](#13-set-up-remote-display-access)
-  - [14. Performance Tuning](#14-performance-tuning)
+   - [13. Set Up Remote Display Access](#13-set-up-remote-display-access)
+   - [14. Performance Tuning](#14-performance-tuning)
 - [Additional Guides (docs/)](#additional-guides-docs)
 - [Scripts](#scripts)
 - [Single-GPU Passthrough](#single-gpu-passthrough)
+- [Management Tools](#management-tools)
 - [Troubleshooting](#troubleshooting) — see also [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - [FAQ](#faq) — see also [`docs/FAQ.md`](docs/FAQ.md)
 - [Repository Structure](#repository-structure)
@@ -1133,6 +1147,7 @@ This repository is more than a single walkthrough. Specialized guides live in `d
 | [GLOSSARY.md](docs/GLOSSARY.md) | Every acronym and term explained |
 | [FAQ.md](docs/FAQ.md) | Frequently asked questions |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Extended troubleshooting reference |
+| [MANAGEMENT.md](docs/MANAGEMENT.md) | Operating VMs & GPUs with `vmctl.sh`, `gpu_recovery.sh`, and the Makefile |
 
 ---
 
@@ -1159,8 +1174,58 @@ This repository includes helper scripts for common tasks:
 | `scripts/restore_vm.sh` | Restores a VM from a backup |
 | `scripts/snapshot_vm.sh` | Create/list/revert/delete VM snapshots |
 | `scripts/collect_info.sh` | Dumps all diagnostics for a support thread |
+| `scripts/vmctl.sh` | Unified VM lifecycle + GPU controller (`status`, `start`, `stop`, `reboot`, `attach-gpu`, `detach-gpu`, `info`) |
+| `scripts/gpu_recovery.sh` | Recovers a stuck GPU after a VM crash (force-unbind + PCI reset + rebind) |
 
 All scripts require root privileges where noted. Run with `sudo bash scripts/<script>.sh`.
+
+---
+
+## Management Tools
+
+Tired of remembering which script does what? The repo ships a few higher-level
+tools so you can drive everything with one command.
+
+### `vmctl.sh` — unified VM controller
+
+One entrypoint for the full VM + GPU lifecycle, building on the helpers above:
+
+```bash
+# Show status, start, stop, reboot
+sudo bash scripts/vmctl.sh status
+sudo bash scripts/vmctl.sh start win11-gpu 0000:01:00.0 0000:01:00.1
+sudo bash scripts/vmctl.sh stop  win11-gpu 0000:01:00.0 0000:01:00.1 amdgpu
+sudo bash scripts/vmctl.sh reboot win11-gpu
+sudo bash scripts/vmctl.sh info win11-gpu     # state + XML + GPU + display
+
+# Attach/detach a GPU without restarting the whole VM workflow
+sudo bash scripts/vmctl.sh attach-gpu win11-gpu 0000:01:00.0 0000:01:00.1
+sudo bash scripts/vmctl.sh detach-gpu win11-gpu 0000:01:00.0 0000:01:00.1 nvidia
+```
+
+| Command | What it does |
+|---------|--------------|
+| `status` | `virsh list --all` |
+| `start NAME [GPU AUDIO [VID:DEV...]]` | Delegates to `start_vm.sh` (binds GPU first) |
+| `stop NAME [GPU AUDIO [DRIVER]]` | Delegates to `stop_vm.sh` (rebinds GPU after) |
+| `reboot` / `shutdown` / `poweroff` | `virsh` wrapper (graceful → forced as needed) |
+| `suspend` / `resume` | `virsh` suspend/resume |
+| `attach-gpu NAME GPU [AUDIO]` | Bind a GPU to vfio-pci for a defined VM |
+| `detach-gpu NAME GPU [AUDIO] [DRIVER]` | Rebind a GPU to the host |
+| `info NAME` | State, vCPU pinning, attached PCI, display URL |
+
+### `gpu_recovery.sh` — stuck GPU after a VM crash
+
+After a hard `virsh destroy` or a guest crash, the GPU sometimes stays wedged
+on `vfio-pci` and the host never gets its display back. This forces an unbind,
+fires the kernel PCI reset quirk, then hands off to `bind_vfio.sh` to rebind the
+host driver:
+
+```bash
+sudo bash scripts/gpu_recovery.sh 0000:01:00.0 0000:01:00.1 nvidia
+```
+
+The full reference for these tools lives in [`docs/MANAGEMENT.md`](docs/MANAGEMENT.md).
 
 ---
 
@@ -1286,6 +1351,7 @@ gpu-passthrough-kvm/
 |-- README.md                         # This guide
 |-- LICENSE                           # MIT License
 |-- CONTRIBUTING.md                   # Contribution guidelines
+|-- Makefile                          # `make <target>` entrypoint
 |-- .gitignore                        # Git ignore rules
 |-- .editorconfig                     # Editor style consistency
 |-- .shellcheckrc                     # ShellCheck project rules
@@ -1314,7 +1380,8 @@ gpu-passthrough-kvm/
 |   |-- SECURITY.md                   # ACS override, SELinux/AppArmor, hardening
 |   |-- UPGRADING.md                  # Kernel/distro/BIOS update survival
 |   |-- SNAPSHOTS_BACKUPS.md          # Live backups, snapshots, restore
-|   `-- GLOSSARY.md                   # Every term explained
+|   |-- GLOSSARY.md                   # Every term explained
+|   `-- MANAGEMENT.md                 # vmctl.sh, gpu_recovery.sh, Makefile reference
 
 |-- scripts/
 |   |-- detect_gpu.sh                 # GPU detection and ID listing
@@ -1333,7 +1400,9 @@ gpu-passthrough-kvm/
 |   |-- backup_vm.sh                  # VM backup (disk+XML+NVRAM)
 |   |-- restore_vm.sh                 # VM restore
 |   |-- snapshot_vm.sh                # VM snapshot create/list/revert/delete
-|   `-- collect_info.sh               # Diagnostic dump for support threads
+|   |-- collect_info.sh               # Diagnostic dump for support threads
+|   |-- vmctl.sh                      # Unified VM/GPU lifecycle controller
+|   `-- gpu_recovery.sh               # Recover a stuck GPU after VM crash
 
 |-- setup/
 |   |-- debian-ubuntu.sh              # Debian/Ubuntu host setup
