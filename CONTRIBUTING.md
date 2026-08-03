@@ -9,6 +9,8 @@ Contributions are welcome. This project values accuracy, reproducibility, and cl
 - Test changes on real hardware or document the assumptions clearly.
 - Do not add third-party binaries or proprietary dependencies.
 - Use POSIX-compatible shell in scripts unless a specific distribution context is stated.
+- New specialized topics should go in `docs/` (one file per topic) and be linked from the README's "Additional Guides" table.
+- New helper scripts should go in `scripts/`, be self-documenting, and appear in the README script table.
 
 ## Pull Requests
 

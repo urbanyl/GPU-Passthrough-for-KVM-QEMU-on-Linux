@@ -10,11 +10,39 @@
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
   <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
-  <img src="https://img.shields.io/badge/version-2.1.0-blue.svg" alt="Version 2.1.0">
+  <img src="https://img.shields.io/badge/version-3.0.0-blue.svg" alt="Version 3.0.0">
 </p>
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+**v3.0.0 (August 2026):**
+
+**Major expansion — this is now a complete reference, not just a guide:**
+
+**Additions (documentation):**
+- Added 14 new detailed guides in `docs/`: `PERFORMANCE.md`, `STORAGE.md`, `NETWORKING.md`, `AUDIO.md`, `USB_PASSTHROUGH.md`, `LINUX_GUESTS.md`, `INPUT_PASSTHROUGH.md`, `GAMING_OPTIMIZATIONS.md`, `HARDWARE_DATABASE.md`, `SECURITY.md`, `UPGRADING.md`, `REMOTE_ACCESS.md`, `SNAPSHOTS_BACKUPS.md`, `GLOSSARY.md`
+- Windows guest is no longer the only supported guest — Linux guests (NVIDIA/AMD/Intel, Wayland, virtiofs) now have their own guide
+
+**Additions (scripts):**
+- `scripts/setup_vfio.sh` — interactive VFIO setup (kernel params + modprobe) with `--late-bind` mode for AMD RX 9000+
+- `scripts/create_disk.sh` — create qcow2/raw VM disks
+- `scripts/backup_vm.sh` / `scripts/restore_vm.sh` — full VM backup/restore (disk + XML + NVRAM)
+- `scripts/setup_hugepages.sh` — huge page allocation + VM XML integration
+- `scripts/start_vm.sh` / `scripts/stop_vm.sh` — VM lifecycle wrappers with optional GPU binding
+- `scripts/download_virtio.sh` — fetch the latest virtio-win ISO
+- `scripts/status_check.sh` — one-command health check of the whole setup
+
+**Additions (setup + examples):**
+- Added `setup/opensuse.sh` for openSUSE Tumbleweed/Leap
+- Added `examples/` with ready-to-use libvirt hooks (single-GPU), udev rules (evdev input), systemd units (huge pages), and VM XML snippets (Looking Glass, virtiofs, evdev, USB, PCI)
+
+**Improvements:**
+- README now links to all specialized guides; troubleshooting/FAQ point to the new docs
+- Expanded troubleshooting with more root-cause tables
+- Updated repository structure to reflect the real layout
+
+---
 
 **v2.1.0 (July 2026):**
 
@@ -73,6 +101,7 @@
   - [12. Install GPU Drivers in the Guest](#12-install-gpu-drivers-in-the-guest)
   - [13. Set Up Remote Display Access](#13-set-up-remote-display-access)
   - [14. Performance Tuning](#14-performance-tuning)
+- [Additional Guides (docs/)](#additional-guides-docs)
 - [Scripts](#scripts)
 - [Single-GPU Passthrough](#single-gpu-passthrough)
 - [Troubleshooting](#troubleshooting) — see also [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
@@ -156,9 +185,9 @@ All instructions in this guide work on:
 - **Debian** 11+ / **Ubuntu** 22.04+
 - **Arch Linux** / **Manjaro**
 - **Fedora** 38+
-- **openSUSE Tumbleweed**
+- **openSUSE** Tumbleweed / Leap
 
-Distribution-specific differences are noted where they exist.
+Distribution-specific differences are noted where they exist. One-command setup scripts are available in [`setup/`](#repository-structure) for each family.
 
 ---
 
@@ -194,6 +223,8 @@ lspci -k -d $(lspci -nn | grep VGA | awk '{print $1}')
 ```
 
 **If this is your first time, follow the full step-by-step guide below.**
+
+> **Prefer automation?** Run `sudo bash scripts/status_check.sh` any time to get a full health report of your setup (kernel, IOMMU, VFIO, GPU binding, libvirt, VMs).
 
 ---
 
@@ -964,6 +995,8 @@ spicy -h 127.0.0.1 -p 5900
 
 ### 14. Performance Tuning
 
+> This section is the summary. The full deep-dive with measurement tools, iothreads, IRQ affinity, and benchmarks is in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). For gaming-specific settings, see [docs/GAMING_OPTIMIZATIONS.md](docs/GAMING_OPTIMIZATIONS.md).
+
 #### CPU Governor
 
 Set the CPU to performance mode to avoid latency spikes:
@@ -1026,6 +1059,31 @@ echo 'ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/scheduler}="none"' 
 
 ---
 
+## Additional Guides (docs/)
+
+This repository is more than a single walkthrough. Specialized guides live in `docs/`:
+
+| Guide | Covers |
+|-------|--------|
+| [PERFORMANCE.md](docs/PERFORMANCE.md) | CPU pinning, huge pages, iothreads, IRQ tuning, benchmarking |
+| [GAMING_OPTIMIZATIONS.md](docs/GAMING_OPTIMIZATIONS.md) | Gaming-focused host/guest tweaks, NVIDIA/AMD settings, anti-cheat notes |
+| [LINUX_GUESTS.md](docs/LINUX_GUESTS.md) | Running Linux (not Windows) inside the VM, virtiofs, Wayland |
+| [INPUT_PASSTHROUGH.md](docs/INPUT_PASSTHROUGH.md) | Direct keyboard/mouse via evdev hooks or USB controllers |
+| [USB_PASSTHROUGH.md](docs/USB_PASSTHROUGH.md) | USB redirection vs full controller passthrough, VR, DACs |
+| [AUDIO.md](docs/AUDIO.md) | HDMI audio, SPICE, PipeWire, Scream network audio, microphones |
+| [STORAGE.md](docs/STORAGE.md) | qcow2 vs raw, disk buses, cache modes, snapshots |
+| [NETWORKING.md](docs/NETWORKING.md) | NAT, bridging, macvtap, VirtIO multi-queue, firewalls |
+| [REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) | Looking Glass, Sunshine/Moonlight, Parsec, RDP, SPICE |
+| [HARDWARE_DATABASE.md](docs/HARDWARE_DATABASE.md) | CPU/GPU/motherboard compatibility and known issues |
+| [SECURITY.md](docs/SECURITY.md) | ACS override risks, SELinux/AppArmor, guest isolation |
+| [UPGRADING.md](docs/UPGRADING.md) | Surviving kernel, distro, BIOS, and driver updates |
+| [SNAPSHOTS_BACKUPS.md](docs/SNAPSHOTS_BACKUPS.md) | Live backups, snapshots, restore procedures |
+| [GLOSSARY.md](docs/GLOSSARY.md) | Every acronym and term explained |
+| [FAQ.md](docs/FAQ.md) | Frequently asked questions |
+| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Extended troubleshooting reference |
+
+---
+
 ## Scripts
 
 This repository includes helper scripts for common tasks:
@@ -1035,9 +1093,18 @@ This repository includes helper scripts for common tasks:
 | `scripts/detect_gpu.sh` | Detects GPUs and displays vendor:device IDs |
 | `scripts/check_iommu_groups.sh` | Lists all IOMMU groups and their devices |
 | `scripts/check_vfio_binding.sh` | Verifies the GPU is bound to vfio-pci |
+| `scripts/status_check.sh` | One-command health check of the whole setup |
+| `scripts/setup_vfio.sh` | Interactive VFIO setup (kernel params + modprobe, `--late-bind` for RX 9000+) |
 | `scripts/bind_vfio.sh` | Manually binds/unbinds GPU to VFIO (single-GPU or AMD dynamic binding) |
 | `scripts/install_packages.sh` | Installs all required virtualization packages |
 | `scripts/generate_vm_xml.sh` | Generates a starter VM XML with optimal settings |
+| `scripts/create_disk.sh` | Creates qcow2/raw VM disk images |
+| `scripts/download_virtio.sh` | Downloads the latest virtio-win drivers ISO |
+| `scripts/start_vm.sh` | Starts a VM, optionally binding the GPU first |
+| `scripts/stop_vm.sh` | Stops a VM, optionally rebinding the GPU to the host |
+| `scripts/setup_hugepages.sh` | Configures huge pages (host + VM XML) |
+| `scripts/backup_vm.sh` | Full VM backup (disk + XML + NVRAM) |
+| `scripts/restore_vm.sh` | Restores a VM from a backup |
 
 All scripts require root privileges where noted. Run with `sudo bash scripts/<script>.sh`.
 
@@ -1173,20 +1240,55 @@ gpu-passthrough-kvm/
 |-- docs/
 |   |-- GUIDE.md                      # Condensed quick-reference guide
 |   |-- TROUBLESHOOTING.md            # Extended troubleshooting reference
-|   `-- FAQ.md                        # Frequently asked questions
+|   |-- FAQ.md                        # Frequently asked questions
+|   |-- PERFORMANCE.md                # CPU/memory/storage/network/GPU tuning
+|   |-- GAMING_OPTIMIZATIONS.md       # Gaming-focused tuning + anti-cheat notes
+|   |-- LINUX_GUESTS.md               # Linux guests, virtiofs, Wayland
+|   |-- INPUT_PASSTHROUGH.md          # evdev + USB input passthrough
+|   |-- USB_PASSTHROUGH.md            # USB redirection vs controller passthrough
+|   |-- AUDIO.md                      # HDMI/SPICE/PipeWire/Scream audio
+|   |-- STORAGE.md                    # Disk formats, buses, cache modes, backups
+|   |-- NETWORKING.md                 # NAT, bridges, macvtap, multi-queue
+|   |-- REMOTE_ACCESS.md              # Looking Glass, Sunshine, Parsec, RDP
+|   |-- HARDWARE_DATABASE.md          # CPU/GPU/motherboard compatibility
+|   |-- SECURITY.md                   # ACS override, SELinux/AppArmor, hardening
+|   |-- UPGRADING.md                  # Kernel/distro/BIOS update survival
+|   |-- SNAPSHOTS_BACKUPS.md          # Live backups, snapshots, restore
+|   `-- GLOSSARY.md                   # Every term explained
 
 |-- scripts/
 |   |-- detect_gpu.sh                 # GPU detection and ID listing
 |   |-- check_iommu_groups.sh         # IOMMU group inspection
 |   |-- check_vfio_binding.sh         # VFIO binding verification
+|   |-- status_check.sh               # One-command health check
+|   |-- setup_vfio.sh                 # Interactive VFIO config generator
 |   |-- bind_vfio.sh                  # Manual GPU bind/unbind (single-GPU)
 |   |-- install_packages.sh           # Package installation (multi-distro)
 |   |-- generate_vm_xml.sh            # VM XML template generator
+|   |-- create_disk.sh                # VM disk image creation
+|   |-- download_virtio.sh            # virtio-win ISO downloader
+|   |-- start_vm.sh                   # VM start wrapper (+GPU bind)
+|   |-- stop_vm.sh                    # VM stop wrapper (+GPU rebind)
+|   |-- setup_hugepages.sh            # Huge page configuration
+|   |-- backup_vm.sh                  # VM backup (disk+XML+NVRAM)
+|   `-- restore_vm.sh                 # VM restore
 
-`-- setup/
-    |-- debian-ubuntu.sh              # Debian/Ubuntu host setup
-    |-- arch.sh                       # Arch Linux host setup
-    `-- fedora.sh                     # Fedora host setup
+|-- setup/
+|   |-- debian-ubuntu.sh              # Debian/Ubuntu host setup
+|   |-- arch.sh                       # Arch Linux host setup
+|   |-- fedora.sh                     # Fedora host setup
+|   `-- opensuse.sh                   # openSUSE host setup
+
+`-- examples/
+    |-- libvirt-hooks/
+    |   |-- qemu                      # Complete single-GPU hook
+    |   `-- README.md                 # Hook usage + event reference
+    |-- udev/
+    |   `-- 60-qemu-input.rules       # evdev input permissions
+    |-- systemd/
+    |   `-- hugepages.service         # Huge page reservation service
+    `-- xml/
+        `-- README.md                 # Ready-to-paste VM XML snippets
 ```
 
 ---
@@ -1215,5 +1317,5 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 <p align="center">
   <sub>If this guide helped you, consider giving it a star on GitHub.</sub><br>
   <sub>GPU passthrough is complex. This repository makes it manageable.</sub><br>
-  <sub>Last updated: 2026</sub>
+  <sub>v3.0.0 — Last updated: 2026</sub>
 </p>

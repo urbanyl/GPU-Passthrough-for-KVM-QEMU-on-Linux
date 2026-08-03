@@ -1,0 +1,11 @@
+# examples/udev/60-qemu-input.rules
+# Give the kvm group read access to input devices for evdev passthrough.
+# Install: sudo cp 60-qemu-input.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload-rules && sudo udevadm trigger
+# Then:    sudo usermod -aG kvm $USER
+#
+# Security note: members of the kvm group can read all keystrokes on this
+# machine. Prefer a dedicated "input" group over granting broad access if
+# you share the machine.
+
+KERNEL=="event*", SUBSYSTEM=="input", GROUP="kvm", MODE="0660"

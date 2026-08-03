@@ -1,0 +1,11 @@
+[Unit]
+Description=Reserve huge pages for virtual machines
+Before=libvirtd.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo 8192 > /proc/sys/vm/nr_hugepages'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

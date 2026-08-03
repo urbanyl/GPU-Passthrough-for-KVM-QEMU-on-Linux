@@ -2,6 +2,8 @@
 
 Comprehensive troubleshooting guide for GPU passthrough issues.
 
+> **Specialized troubleshooting:** input devices → [INPUT_PASSTHROUGH.md](INPUT_PASSTHROUGH.md) · USB → [USB_PASSTHROUGH.md](USB_PASSTHROUGH.md) · audio → [AUDIO.md](AUDIO.md) · networking → [NETWORKING.md](NETWORKING.md) · performance → [PERFORMANCE.md](PERFORMANCE.md) · backups → [SNAPSHOTS_BACKUPS.md](SNAPSHOTS_BACKUPS.md)
+
 ---
 
 ## Table of Contents
@@ -21,6 +23,9 @@ Comprehensive troubleshooting guide for GPU passthrough issues.
 - [Network Not Working in Guest](#network-not-working-in-guest)
 - [USB Passthrough Issues](#usb-passthrough-issues)
 - [Audio Issues](#audio-issues)
+- [Input/evdev Issues](#inputevdev-issues)
+- [virtiofs Issues](#virtiofs-issues)
+- [Anti-Cheat / Error 43 Variants](#anti-cheat--error-43-variants)
 
 ---
 
@@ -529,3 +534,85 @@ In VM XML, add audio configuration:
 ```
 
 For the passed-through GPU, audio comes through HDMI/DisplayPort automatically when the GPU driver is installed.
+
+---
+
+## Input/evdev Issues
+
+### Symptoms
+
+- Keyboard/mouse not captured by the VM
+- Input works only when the virt-manager window has focus
+- Host keyboard "stolen" and impossible to get back
+
+### Fixes
+
+```bash
+# 1. Verify the device paths exist
+ls -l /dev/input/by-id/
+
+# 2. Confirm your user is in the input/kvm group
+groups $USER
+
+# 3. Reload udev rules after installing the example rule
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+| Symptom | Fix |
+|---------|-----|
+| Not captured at all | Wrong `/dev/input/by-id` path; use `evtest` to identify |
+| Only works when focused | Use `grab='all'` in the evdev `<source>` |
+| Devices captured but dead | Swap the event nodes (keyboard/mouse reversed) |
+| Cannot release devices back to host | Press Ctrl+Alt (default toggle); check libvirt docs for your version |
+| AppArmor blocks access | Add the virt-aa-helper local rule (see [INPUT_PASSTHROUGH.md](INPUT_PASSTHROUGH.md)) |
+| Host unusable after grab | Use `grab='toggle'`; keep an SSH session ready |
+
+---
+
+## virtiofs Issues
+
+### Symptoms
+
+- `mount -t virtiofs` fails in the guest
+- Shared folder not visible
+- VM fails to start after adding `<filesystem>`
+
+### Fixes
+
+1. **Kernel too old:** virtiofs needs guest kernel 5.4+ (Ubuntu 22.04, Fedora 36+, Arch, openSUSE TW all fine)
+2. **XML missing the driver type:**
+   ```xml
+   <filesystem type='mount' accessmode='passthrough'>
+     <driver type='virtiofs'/>
+     <source dir='/home/you/shared'/>
+     <target dir='shared'/>
+   </filesystem>
+   ```
+3. **Module not loaded in guest:** `sudo modprobe virtiofs`
+4. **libvirt too old to expose virtiofs:** upgrade libvirt/QEMU (needs QEMU 5.0+)
+5. **AppArmor denies source dir access:** add a local profile rule for the shared directory
+6. **Windows guest:** virtiofs is Linux-only — use SMB instead (see [REMOTE_ACCESS.md](REMOTE_ACCESS.md))
+
+---
+
+## Anti-Cheat / Error 43 Variants
+
+### Error 43 persists after adding kvm=hidden
+
+```bash
+# 1. Full power cycle (not just reboot):
+sudo virsh shutdown win11-gpu && sleep 5 && sudo virsh start win11-gpu
+
+# 2. Verify the CPU model:
+sudo virsh edit win11-gpu   # <cpu mode='host-passthrough' check='none'/>
+
+# 3. Complete hyperv block with vendor_id (README §10)
+# 4. Add <vmport state='off'/>
+# 5. Try an older driver version
+```
+
+### Game/Vanguard says "VM detected"
+
+- Confirm `<kvm><hidden state='on'/></kvm>` is present **after** the hyperv block
+- Some anti-cheats detect the hypervisor CPUID even when hidden; no reliable workaround exists — treat this as an unsupported configuration for that title
+- Do **not** attempt to bypass anti-cheat by spoofing further (see [GAMING_OPTIMIZATIONS.md](GAMING_OPTIMIZATIONS.md) and [SECURITY.md](SECURITY.md))

@@ -2,6 +2,8 @@
 
 A condensed reference for experienced users. For the full guide, see [README.md](../README.md).
 
+> **Deep dives:** performance → [PERFORMANCE.md](PERFORMANCE.md) · gaming → [GAMING_OPTIMIZATIONS.md](GAMING_OPTIMIZATIONS.md) · Linux guests → [LINUX_GUESTS.md](LINUX_GUESTS.md) · input → [INPUT_PASSTHROUGH.md](INPUT_PASSTHROUGH.md) · USB → [USB_PASSTHROUGH.md](USB_PASSTHROUGH.md) · audio → [AUDIO.md](AUDIO.md) · storage → [STORAGE.md](STORAGE.md) · networking → [NETWORKING.md](NETWORKING.md) · remote access → [REMOTE_ACCESS.md](REMOTE_ACCESS.md) · hardware → [HARDWARE_DATABASE.md](HARDWARE_DATABASE.md) · security → [SECURITY.md](SECURITY.md) · upgrades → [UPGRADING.md](UPGRADING.md) · backups → [SNAPSHOTS_BACKUPS.md](SNAPSHOTS_BACKUPS.md) · glossary → [GLOSSARY.md](GLOSSARY.md)
+
 ## Minimal Steps
 
 ```bash

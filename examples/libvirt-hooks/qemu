@@ -1,0 +1,81 @@
+#!/bin/bash
+# examples/libvirt-hooks/qemu -- Complete single-GPU passthrough hook
+#
+# Place at /etc/libvirt/hooks/qemu and make it executable:
+#   sudo mkdir -p /etc/libvirt/hooks
+#   sudo cp examples/libvirt-hooks/qemu /etc/libvirt/hooks/qemu
+#   sudo chmod +x /etc/libvirt/hooks/qemu
+#
+# EDIT the variables below for your hardware:
+#   VM_NAME     must match your VM name exactly
+#   GPU_PCI     the passthrough GPU (lspci | grep VGA)
+#   AUDIO_PCI   the GPU's audio function (usually same slot, function .1)
+#   GPU_IDS     vendor:device IDs (lspci -nn)
+#   HOST_DRIVER the driver to restore on the host (nvidia / amdgpu / nouveau)
+#
+# This hook:
+#   - prepare: stops the display manager, frees the GPU, binds it to vfio-pci
+#   - release: unbinds from vfio-pci, reloads the host driver, restarts DM
+#
+# ALWAYS keep SSH access enabled while testing hooks.
+
+VM_NAME="win11-gpu"
+GPU_PCI="0000:01:00.0"
+AUDIO_PCI="0000:01:00.1"
+GPU_IDS="10de:1af2,10de:1af9"
+HOST_DRIVER="nvidia"
+
+# Set this to "yes" for AMD RX 9000+ (do not unload amdgpu; let it init first)
+AMD_DYNAMIC_BIND="no"
+
+if [ "${1}" = "$VM_NAME" ]; then
+    case "${2}" in
+        prepare)
+            systemctl stop display-manager
+            sleep 2
+
+            # Unload the host GPU driver (skip for AMD dynamic binding)
+            if [ "$AMD_DYNAMIC_BIND" = "no" ]; then
+                if [ "$HOST_DRIVER" = "nvidia" ]; then
+                    modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia
+                elif [ "$HOST_DRIVER" = "nouveau" ]; then
+                    modprobe -r nouveau
+                elif [ "$HOST_DRIVER" = "amdgpu" ]; then
+                    modprobe -r amdgpu
+                fi
+            fi
+
+            # Unbind from the current driver
+            echo "$GPU_PCI"   > /sys/bus/pci/devices/$GPU_PCI/driver/unbind   2>/dev/null || true
+            echo "$AUDIO_PCI" > /sys/bus/pci/devices/$AUDIO_PCI/driver/unbind 2>/dev/null || true
+
+            # Bind to vfio-pci
+            modprobe vfio-pci
+            for ID in $(echo "$GPU_IDS" | tr ',' ' '); do
+                VENDOR=${ID%%:*}
+                DEVICE=${ID##*:}
+                echo "$VENDOR $DEVICE" > /sys/bus/pci/drivers/vfio-pci/new_id 2>/dev/null || true
+            done
+            echo "$GPU_PCI"   > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || true
+            echo "$AUDIO_PCI" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || true
+            ;;
+
+        release|stopped|reconnect)
+            echo "$GPU_PCI"   > /sys/bus/pci/devices/$GPU_PCI/driver/unbind   2>/dev/null || true
+            echo "$AUDIO_PCI" > /sys/bus/pci/devices/$AUDIO_PCI/driver/unbind 2>/dev/null || true
+            modprobe -r vfio-pci 2>/dev/null || true
+
+            # Reload the host driver
+            if [ "$HOST_DRIVER" = "nvidia" ]; then
+                modprobe nvidia
+                modprobe nvidia_modeset
+                modprobe nvidia_uvm
+                modprobe nvidia_drm
+            else
+                modprobe "$HOST_DRIVER"
+            fi
+
+            systemctl start display-manager
+            ;;
+    esac
+fi

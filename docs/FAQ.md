@@ -98,6 +98,27 @@ VirtIO drivers are paravirtualized drivers that allow the VM to communicate effi
 
 ## Performance
 
+### Why is my VM slower than expected?
+
+Work through [PERFORMANCE.md](PERFORMANCE.md) in order. The usual suspects are, in order of impact:
+1. CPU governor not set to `performance`
+2. No CPU pinning (`cputune`) and no core isolation (`isolcpus`)
+3. Memory ballooning still active
+4. Disk on emulated SATA/IDE instead of VirtIO, or `cache` set to `writeback`
+5. Missing huge pages
+
+### What is the fastest disk setup?
+
+VirtIO (or NVMe emulation) backed by an NVMe SSD, with `cache='none' io='native' discard='unmap'`, plus iothreads for multiple disks. See [STORAGE.md](STORAGE.md).
+
+### How much does networking affect games?
+
+NAT adds a small amount of latency. For competitive gaming, use a bridge or macvtap and enable VirtIO multi-queue. See [NETWORKING.md](NETWORKING.md).
+
+### How do I measure latency in the guest?
+
+`LatencyMon` (Windows) and `PresentMon` for frame times. Aim for < 1 ms DPC latency and smooth frame pacing. See [GAMING_OPTIMIZATIONS.md](GAMING_OPTIMIZATIONS.md).
+
 ### How much performance do I lose?
 
 With proper configuration:
@@ -149,6 +170,26 @@ Some USB-C ports on GPUs are separate PCIe functions. You need to identify and p
 ---
 
 ## Advanced
+
+### Can I run a Linux guest instead of Windows?
+
+Yes. Linux guests need no `kvm=hidden` or `vendor_id` workaround. Use virtiofs for shared folders and the guest's native drivers. See [LINUX_GUESTS.md](LINUX_GUESTS.md).
+
+### How do I back up my VM?
+
+Export the XML with `virsh dumpxml`, copy the disk image, and keep the NVRAM. Use `scripts/backup_vm.sh`. For zero-downtime backups use external snapshots + blockcommit. See [SNAPSHOTS_BACKUPS.md](SNAPSHOTS_BACKUPS.md).
+
+### Is GPU passthrough safe?
+
+The IOMMU restricts what the passed GPU can access, but the guest effectively owns the hardware. Treat the guest as a semi-trusted machine, keep SELinux/AppArmor on, and understand the ACS override trade-off. See [SECURITY.md](SECURITY.md).
+
+### How do I keep the setup working after a kernel update?
+
+Rebuild the initramfs after every kernel upgrade and re-verify binding with `scripts/check_vfio_binding.sh`. See [UPGRADING.md](UPGRADING.md).
+
+### How do I pass my keyboard and mouse directly to the guest?
+
+Use evdev hooks or pass a whole USB controller. See [INPUT_PASSTHROUGH.md](INPUT_PASSTHROUGH.md).
 
 ### Can I pass through multiple GPUs?
 
