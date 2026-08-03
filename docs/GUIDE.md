@@ -1,6 +1,6 @@
 # GPU Passthrough Quick Reference
 
-A condensed reference for experienced users. For the full guide, see [README.md](../README.md).
+A condensed reference for experienced users. For the full guide, see [README.md](../README.md). If you already did this once and just need the commands, this is the page. If this is your first time, honestly, start with the README — this one skips all the explanation and that explanation is usually what saves you.
 
 > **Deep dives:** performance → [PERFORMANCE.md](PERFORMANCE.md) · gaming → [GAMING_OPTIMIZATIONS.md](GAMING_OPTIMIZATIONS.md) · Linux guests → [LINUX_GUESTS.md](LINUX_GUESTS.md) · input → [INPUT_PASSTHROUGH.md](INPUT_PASSTHROUGH.md) · USB → [USB_PASSTHROUGH.md](USB_PASSTHROUGH.md) · audio → [AUDIO.md](AUDIO.md) · storage → [STORAGE.md](STORAGE.md) · networking → [NETWORKING.md](NETWORKING.md) · remote access → [REMOTE_ACCESS.md](REMOTE_ACCESS.md) · hardware → [HARDWARE_DATABASE.md](HARDWARE_DATABASE.md) · security → [SECURITY.md](SECURITY.md) · upgrades → [UPGRADING.md](UPGRADING.md) · backups → [SNAPSHOTS_BACKUPS.md](SNAPSHOTS_BACKUPS.md) · glossary → [GLOSSARY.md](GLOSSARY.md)
 
@@ -15,7 +15,8 @@ bash scripts/check_iommu_groups.sh
 
 # 3. Configure GRUB (replace IDs with yours)
 # Intel: intel_iommu=on iommu=pt vfio-pci.ids=XXXX:XXXX,XXXX:XXXX rd.driver.pre=vfio-pci
-# AMD:   amd_iommu=on iommu=pt vfio-pci.ids=XXXX:XXXX,XXXX:XXXX rd.driver.pre=vfio-pci
+# AMD:   iommu=pt vfio-pci.ids=XXXX:XXXX,XXXX:XXXX rd.driver.pre=vfio-pci
+#   (ignore old guides that say amd_iommu=on — no-op on modern kernels)
 
 # 4. Configure VFIO
 echo 'options vfio-pci ids=XXXX:XXXX,XXXX:XXXX' | sudo tee /etc/modprobe.d/vfio.conf

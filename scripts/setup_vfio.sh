@@ -52,10 +52,12 @@ echo ""
 # --- Detect CPU vendor ---
 if grep -q -i "GenuineIntel" /proc/cpuinfo; then
     CPU_VENDOR="intel"
-    IOMMU_PARAM="intel_iommu=on"
+    IOMMU_PARAM="intel_iommu=on iommu=pt"
 elif grep -q -i "AuthenticAMD" /proc/cpuinfo; then
     CPU_VENDOR="amd"
-    IOMMU_PARAM="amd_iommu=on"
+    # Note: no amd_iommu=on — that old parameter is a no-op on modern kernels.
+    # The AMD IOMMU is enabled automatically when AMD-Vi is on in the BIOS.
+    IOMMU_PARAM="iommu=pt"
 else
     echo -e "${RED}Could not detect CPU vendor.${NC}"
     exit 1

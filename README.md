@@ -10,11 +10,18 @@
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
   <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
-  <img src="https://img.shields.io/badge/version-3.0.0-blue.svg" alt="Version 3.0.0">
+  <img src="https://img.shields.io/badge/version-3.0.1-blue.svg" alt="Version 3.0.1">
 </p>
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+**v3.0.1 (August 2026):**
+
+**Fixes (thanks to the r/VFIO thread):**
+- Removed the stale `amd_iommu=on` kernel parameter everywhere. On modern kernels it's a no-op — the AMD IOMMU auto-enables from the BIOS (AMD-Vi), no kernel flag needed. The old parameter is misinformation that keeps getting copied between guides, and we had it too. Intel still genuinely needs `intel_iommu=on`.
+- Removed the leftover `iommu=1` suggestion (also stale/pointless).
+- Toning down the "perfectly polished" voice throughout so the project reads like a real maintainer wrote it — because one did.
 
 **v3.0.0 (August 2026):**
 
@@ -118,12 +125,16 @@ GPU passthrough on Linux is well-documented across dozens of blog posts, forum t
 
 The goal is simple: give you a reproducible path from a bare Linux install to a Windows VM with full GPU acceleration, with clear recovery steps at every stage.
 
+**A quick honest note before you dive in:** this project started because I kept losing half my evenings to dead wiki links and forum posts that assumed I already knew the whole thing. So a lot of the wording here is deliberately plain, and where the docs are confident, it's because the steps were run and verified — not copy-pasted from somewhere. That said, GPU passthrough is hardware-dependent and nobody's guide is 100% universal. If something here is wrong or outdated for your setup, open an issue or PR. It happens, and fixing it is what makes this better.
+
 **This guide is for you if:**
 
 - You want to play Windows games on Linux without dual-booting
 - You need GPU-accelerated Windows applications (CAD, video editing, machine learning) on a Linux workstation
 - You want to run a Windows VM for development or testing with real GPU access
 - You are tired of forum posts that solve one problem but create three more
+
+**If you came from r/VFIO or r/linux_gaming:** hello. This is the repo the post pointed to. The short version of everything is in the [Quick Start](#quick-start); the long version is the step-by-step below; the specialized topics live in [`docs/`](#additional-guides-docs).
 
 ---
 
@@ -208,7 +219,8 @@ sudo usermod -aG libvirt $USER
 lspci -nn | grep -iE 'vga|audio'
 
 # 4. Add to /etc/default/grub (replace IDs with yours):
-# GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on iommu=pt vfio-pci.ids=XXXX:XXXX,XXXX:XXXX"
+# Intel: GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on iommu=pt vfio-pci.ids=XXXX:XXXX,XXXX:XXXX"
+# AMD:   GRUB_CMDLINE_LINUX_DEFAULT="quiet splash iommu=pt vfio-pci.ids=XXXX:XXXX,XXXX:XXXX"
 
 # 5. Add to /etc/modprobe.d/vfio.conf:
 # options vfio-pci ids=XXXX:XXXX,XXXX:XXXX
@@ -302,7 +314,7 @@ For AMD:
 **If IOMMU does not appear in dmesg:**
 - Go back to BIOS and enable VT-d/AMD-Vi/IOMMU
 - Make sure the kernel parameter is set (see Step 5)
-- Try adding `iommu=1` to the kernel command line
+- On AMD, the IOMMU is enabled automatically by the kernel when AMD-Vi is on in the BIOS — there's no magic kernel flag to add. If it's missing in dmesg, it's almost always a BIOS thing.
 
 **Do not proceed until this step passes.**
 
@@ -419,8 +431,10 @@ GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on iommu=pt vfio-pci.ids=10
 **AMD systems:**
 
 ```bash
-GRUB_CMDLINE_LINUX_DEFAULT="quiet splash amd_iommu=on iommu=pt vfio-pci.ids=10de:1af2,10de:1af9 rd.driver.pre=vfio-pci"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash iommu=pt vfio-pci.ids=10de:1af2,10de:1af9 rd.driver.pre=vfio-pci"
 ```
+
+> **Note:** you'll see `amd_iommu=on` in a lot of old forum posts and guides. It's a leftover from years ago — on modern kernels it does nothing, because the AMD IOMMU is enabled by default whenever AMD-Vi is turned on in the BIOS. Intel is the opposite: `intel_iommu=on` is genuinely required there. Don't waste an evening "fixing" your kernel params because of that old parameter.
 
 > **Replace `10de:1af2,10de:1af9` with your actual GPU vendor:device IDs.**
 
@@ -452,8 +466,14 @@ sudo grub-mkconfig -o /boot/grub/grub.cfg
 
 Edit `/boot/loader/entries/*.conf` and add the parameters to the `options` line:
 
+Intel:
 ```
 options root=UUID=xxxx-xxxx rw quiet splash intel_iommu=on iommu=pt vfio-pci.ids=10de:1af2,10de:1af9 rd.driver.pre=vfio-pci
+```
+
+AMD (no iommu enable flag needed — see the note above):
+```
+options root=UUID=xxxx-xxxx rw quiet splash iommu=pt vfio-pci.ids=10de:1af2,10de:1af9 rd.driver.pre=vfio-pci
 ```
 
 Then rebuild:

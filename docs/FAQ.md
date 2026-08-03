@@ -1,5 +1,7 @@
 # Frequently Asked Questions
 
+The usual questions. If yours isn't here, check [TROUBLESHOOTING.md](TROUBLESHOOTING.md) and the specialized docs linked in the [README](../README.md#additional-guides-docs) — and if you still can't find it, open an issue. Someone else has probably hit the same wall.
+
 ---
 
 ## General

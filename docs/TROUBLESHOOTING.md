@@ -436,7 +436,7 @@ dmesg | grep -Ei 'iommu|dmar|amd-vi|vt-d'
 ### Fix
 
 1. Enable VT-d/AMD-Vi in BIOS
-2. Add `intel_iommu=on iommu=pt` (Intel) or `amd_iommu=on iommu=pt` (AMD) to kernel params
+2. Add `intel_iommu=on iommu=pt` (Intel) to kernel params. On AMD there's no enable flag — the IOMMU auto-enables from the BIOS (AMD-Vi), so just use `iommu=pt`.
 3. Rebuild initramfs and reboot
 4. Some motherboards require enabling "Above 4G Decoding" for IOMMU to work
 

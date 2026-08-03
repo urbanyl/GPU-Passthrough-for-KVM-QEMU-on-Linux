@@ -18,10 +18,11 @@ echo ""
 if [ ! -d /sys/kernel/iommu_groups ]; then
     echo -e "${RED}ERROR: /sys/kernel/iommu_groups does not exist.${NC}"
     echo ""
-    echo "IOMMU may not be enabled. Check:"
-    echo "  1. BIOS: Enable VT-d (Intel) or AMD-Vi (AMD)"
-    echo "  2. Kernel parameters: intel_iommu=on iommu=pt"
-    echo "  3. dmesg | grep -i iommu"
+echo "IOMMU may not be enabled. Check:"
+echo "  1. BIOS: Enable VT-d (Intel) or AMD-Vi / SVM (AMD)"
+echo "  2. Kernel parameters (Intel): intel_iommu=on iommu=pt"
+echo "     (AMD needs no enable flag - the IOMMU auto-enables from the BIOS)"
+echo "  3. dmesg | grep -i iommu"
     exit 1
 fi
 
