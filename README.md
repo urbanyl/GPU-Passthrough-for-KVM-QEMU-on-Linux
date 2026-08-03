@@ -18,7 +18,7 @@
 
 **v3.0.0 (August 2026):**
 
-**Major expansion — this is now a complete reference, not just a guide:**
+**Major expansion :**
 
 **Additions (documentation):**
 - Added 14 new detailed guides in `docs/`: `PERFORMANCE.md`, `STORAGE.md`, `NETWORKING.md`, `AUDIO.md`, `USB_PASSTHROUGH.md`, `LINUX_GUESTS.md`, `INPUT_PASSTHROUGH.md`, `GAMING_OPTIMIZATIONS.md`, `HARDWARE_DATABASE.md`, `SECURITY.md`, `UPGRADING.md`, `REMOTE_ACCESS.md`, `SNAPSHOTS_BACKUPS.md`, `GLOSSARY.md`
