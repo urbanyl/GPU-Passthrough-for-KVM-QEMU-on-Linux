@@ -7,6 +7,10 @@
 #   make setup      # run the interactive VFIO setup
 #   make detect     # detect GPUs and IOMMU groups
 #   make status     # VM status (alias: vm-status)
+#   make doctor     # full health check via gpupt
+#   make gpupt-status / gpupt-profiles / gpupt-help
+#   make gpupt-bind   PROFILE=win11 DRY=--dry-run   # bind GPU to vfio-pci
+#   make gpupt-unbind PROFILE=win11 DRY=--dry-run   # restore host driver
 #   make vm-start   # start win11-gpu (uses start_vm.sh)
 #   make vm-stop    # stop win11-gpu
 #   make vm-reboot  # reboot win11-gpu
@@ -17,8 +21,10 @@
 #
 # Override the VM name, e.g. `make vm-start VM=gaming`
 VM ?= win11-gpu
+PROFILE ?= win11
+DRY ?=
 
-.PHONY: help check setup detect status vm-status vm-start vm-stop vm-reboot backup restore info lint
+.PHONY: help check setup detect status vm-status doctor gpupt-help gpupt-status gpupt-profiles gpupt-bind gpupt-unbind vm-start vm-stop vm-reboot backup restore info lint
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make <target>\n\nTargets:\n" } /^[a-zA-Z0-9_-]+:.*?##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -35,6 +41,24 @@ detect: ## Detect GPUs and IOMMU groups
 
 status vm-status: ## Show VM lifecycle status
 	virsh list --all
+
+doctor: ## Full health check via gpupt (exit 0 ok / 1 warn / 2 fail)
+	sudo bash scripts/gpupt doctor
+
+gpupt-help: ## Show gpupt usage
+	bash scripts/gpupt
+
+gpupt-status: ## gpupt status: VMs, GPUs, profiles
+	bash scripts/gpupt status
+
+gpupt-profiles: ## List configured GPU profiles
+	bash scripts/gpupt profile list
+
+gpupt-bind: ## Bind a profile's GPU to vfio-pci: PROFILE=win11, add DRY=--dry-run to preview
+	sudo bash scripts/gpupt bind $(PROFILE) $(DRY)
+
+gpupt-unbind: ## Restore a profile's GPU to the host: PROFILE=win11, add DRY=--dry-run to preview
+	sudo bash scripts/gpupt unbind $(PROFILE) $(DRY)
 
 vm-start: ## Start the VM (binds GPU first if args provided via GPU=...)
 	sudo bash scripts/start_vm.sh $(VM) $(GPU) $(AUDIO)
@@ -55,4 +79,4 @@ info: ## Dump diagnostics for a support thread
 	bash scripts/collect_info.sh
 
 lint: ## Run shellcheck on all scripts (install shellcheck first)
-	shellcheck scripts/*.sh setup/*.sh install.sh
+	shellcheck scripts/*.sh scripts/gpupt setup/*.sh install.sh

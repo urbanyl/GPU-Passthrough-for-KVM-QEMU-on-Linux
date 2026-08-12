@@ -10,11 +10,21 @@
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
   <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
-  <img src="https://img.shields.io/badge/version-3.2.0-blue.svg" alt="Version 3.2.0">
+  <img src="https://img.shields.io/badge/version-3.3.0-blue.svg" alt="Version 3.3.0">
 </p>
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+**v3.3.0 (August 2026):**
+
+**Additions (tooling):**
+- `scripts/gpupt` — a single `gpupt <command>` CLI that wraps the whole workflow: `doctor`, `detect`, `groups`, `status`, `profile add/edit/show/rm/list`, `bind`/`unbind` (with `--dry-run`), `start`/`stop`, `hooks install/remove/status`, `recover`, `log`, and `complete`. Profiles live in `/etc/gpupt/config`; everything else needed (systemd hooks, DM restart) is generated for you.
+- `docs/GPUPT.md` — reference for the `gpupt` CLI
+
+**Changes:**
+- New "`gpupt` — one command for everything" section in Management Tools
+- Version badge bumped to 3.3.0
 
 **v3.2.0 (August 2026):**
 
@@ -1148,6 +1158,7 @@ This repository is more than a single walkthrough. Specialized guides live in `d
 | [FAQ.md](docs/FAQ.md) | Frequently asked questions |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Extended troubleshooting reference |
 | [MANAGEMENT.md](docs/MANAGEMENT.md) | Operating VMs & GPUs with `vmctl.sh`, `gpu_recovery.sh`, and the Makefile |
+| [GPUPT.md](docs/GPUPT.md) | The `gpupt` CLI: profiles, bind/unbind, start/stop, hooks, recovery |
 
 ---
 
@@ -1176,6 +1187,7 @@ This repository includes helper scripts for common tasks:
 | `scripts/collect_info.sh` | Dumps all diagnostics for a support thread |
 | `scripts/vmctl.sh` | Unified VM lifecycle + GPU controller (`status`, `start`, `stop`, `reboot`, `attach-gpu`, `detach-gpu`, `info`) |
 | `scripts/gpu_recovery.sh` | Recovers a stuck GPU after a VM crash (force-unbind + PCI reset + rebind) |
+| `scripts/gpupt` | One-command CLI for the whole workflow (`doctor`, `detect`, `profile`, `bind`/`unbind`, `start`/`stop`, `hooks`, `recover`, `log`) |
 
 All scripts require root privileges where noted. Run with `sudo bash scripts/<script>.sh`.
 
@@ -1226,6 +1238,42 @@ sudo bash scripts/gpu_recovery.sh 0000:01:00.0 0000:01:00.1 nvidia
 ```
 
 The full reference for these tools lives in [`docs/MANAGEMENT.md`](docs/MANAGEMENT.md).
+
+### `gpupt` — one command for everything
+
+`scripts/gpupt` is a profile-driven CLI that replaces the manual sequence of
+"detect → bind → start → stop → rebind" with short commands. Profiles are stored
+in `/etc/gpupt/config` (see [`docs/GPUPT.md`](docs/GPUPT.md)); the interactive
+wizard and `--dry-run` make it safe to explore before it touches anything:
+
+```bash
+bash scripts/gpupt doctor                          # full health check, exit codes for scripts
+bash scripts/gpupt profile add win11 --vm win11-gpu \
+    --gpu 0000:01:00.0 --audio 0000:01:00.1 --driver amdgpu --late-bind
+bash scripts/gpupt profile list
+bash scripts/gpupt bind win11 --dry-run            # preview before it stops the display manager
+sudo bash scripts/gpupt bind win11                 # stop DM + hand GPU to vfio-pci
+sudo bash scripts/gpupt start win11
+sudo bash scripts/gpupt stop win11
+sudo bash scripts/gpupt unbind win11               # restore host driver + restart DM
+sudo bash scripts/gpupt hooks install              # generate the libvirt qemu hook
+bash scripts/gpupt status
+```
+
+| Command | What it does |
+|---------|--------------|
+| `doctor [--json]` | Health check with hints (exit 0 ok / 1 warn / 2 fail) |
+| `detect`, `groups [PCI...]` | GPUs, IDs, drivers, IOMMU groups |
+| `status [PROFILE]` | VMs, GPUs, and configured profiles in one view |
+| `profile add/show/edit/rm/list` | Manage GPU profiles (wizard or CLI flags) |
+| `bind [PROFILE|PCI...] [--dry-run]` | Stop DM and bind GPU to vfio-pci (`--no-dm` to skip) |
+| `unbind [PROFILE|PCI...] [--dry-run]` | Rebind the host driver and restart the DM |
+| `start PROFILE [--no-bind]` / `stop PROFILE` | Start/stop the VM around the profile's GPU |
+| `hooks install/remove/status` | Generate/remove the libvirt `qemu` hook |
+| `recover GPU [AUDIO] [DRIVER]` | Force-unbind + PCI reset + rebind a stuck GPU |
+| `log [N]`, `config show`, `complete` | Logs, configuration, shell completion |
+
+The full `gpupt` reference lives in [`docs/GPUPT.md`](docs/GPUPT.md).
 
 ---
 
@@ -1381,6 +1429,7 @@ gpu-passthrough-kvm/
 |   |-- UPGRADING.md                  # Kernel/distro/BIOS update survival
 |   |-- SNAPSHOTS_BACKUPS.md          # Live backups, snapshots, restore
 |   |-- GLOSSARY.md                   # Every term explained
+|   |-- GPUPT.md                      # gpupt CLI reference
 |   `-- MANAGEMENT.md                 # vmctl.sh, gpu_recovery.sh, Makefile reference
 
 |-- scripts/
@@ -1402,7 +1451,8 @@ gpu-passthrough-kvm/
 |   |-- snapshot_vm.sh                # VM snapshot create/list/revert/delete
 |   |-- collect_info.sh               # Diagnostic dump for support threads
 |   |-- vmctl.sh                      # Unified VM/GPU lifecycle controller
-|   `-- gpu_recovery.sh               # Recover a stuck GPU after VM crash
+|   |-- gpu_recovery.sh               # Recover a stuck GPU after VM crash
+|   `-- gpupt                         # One-command CLI (profiles, bind, hooks, ...)
 
 |-- setup/
 |   |-- debian-ubuntu.sh              # Debian/Ubuntu host setup

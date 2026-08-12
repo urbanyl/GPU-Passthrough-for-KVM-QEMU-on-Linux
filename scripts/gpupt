@@ -1,0 +1,1704 @@
+#!/usr/bin/env bash
+# gpupt -- GPU passthrough automation for KVM/QEMU.
+#
+# A single entry point for the whole VFIO passthrough lifecycle: detection,
+# IOMMU inspection, profile management, GPU binding, VM control, libvirt hook
+# generation and stuck-GPU recovery. Handles single-GPU passthrough (the GPU
+# also drives the host desktop) and multi-GPU setups, with AMD RX 9000+ late
+# binding built in.
+#
+# Everything is driven by profiles in a plain config file (default
+# /etc/gpupt/config). When you change a profile, re-run `gpupt hooks install`
+# and the libvirt hook stays in sync automatically.
+#
+# This file is self-contained on purpose -- it is the release artifact.
+# Docs: docs/GPUPASSTHROUGH.md
+#
+# License: MIT (same as the rest of this repository).
+
+# Intentionally no `set -e` here: binding a GPU is a sequence of steps that can
+# fail halfway, and when it does we need to keep going so we can roll back
+# cleanly instead of leaving the machine with a dead GPU.
+set -uo pipefail
+
+VERSION="1.0.0"
+
+CONFIG_FILE="${GPUPT_CONFIG:-/etc/gpupt/config}"
+STATE_DIR="${GPUPT_STATE:-/var/lib/gpupt}"
+STATE_FILE="$STATE_DIR/state"
+LOGFILE="${GPUPT_LOG:-/var/log/gpupt.log}"
+LOG_MAX_BYTES=262144
+
+# --- colours ---------------------------------------------------------------
+C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YEL='\033[1;33m'
+C_CYN='\033[0;36m'; C_NC='\033[0m'
+[ -t 1 ] && [ -z "${NO_COLOR:-}" ] || C_RED='' C_GREEN='' C_YEL='' C_CYN='' C_NC=''
+
+QUIET=false
+
+# --- messaging / logging ---------------------------------------------------
+
+msg()  { printf '%s\n' "$*"; }
+info() { $QUIET || printf '%b%s%b\n' "$C_CYN" "$*" "$C_NC"; }
+ok()   { $QUIET || printf '%b[ OK ]%b %s\n' "$C_GREEN" "$C_NC" "$*"; }
+warn() { printf '%b[WARN]%b %s\n' "$C_YEL" "$C_NC" "$*" >&2; }
+err()  { printf '%b[FAIL]%b %s\n' "$C_RED" "$C_NC" "$*" >&2; }
+die()  { local m=${1:-fatal error}; err "$m"; log "error: $m"; exit "${2:-1}"; }
+
+log() {
+    printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE" 2>/dev/null || true
+}
+
+rotate_log() {
+    [ -f "$LOGFILE" ] || return 0
+    local size
+    size=$(stat -c%s "$LOGFILE" 2>/dev/null || echo 0)
+    if [ "$size" -gt "$LOG_MAX_BYTES" ]; then
+        mv -f "$LOGFILE" "$LOGFILE.1" 2>/dev/null || true
+    fi
+}
+
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "this operation needs root (run with sudo)"; }
+
+is_intel() { grep -qi GenuineIntel /proc/cpuinfo 2>/dev/null; }
+is_amd()   { grep -qi AuthenticAMD /proc/cpuinfo 2>/dev/null; }
+
+# --- PCI helpers ------------------------------------------------------------
+
+pci_norm() {
+    # Normalise a PCI address to domain:bus:slot.function, all lowercase.
+    # Accepts "01:00.0", "01:00", "0000:01:00.0".
+    local a=$1 rest domain bus slot func
+    case "$a" in
+        *:*:*) : ;;                # already domain:bus:slot[.func]
+        *.*)   a="0000:$a" ;;      # bus:slot.func
+        *:*)   a="0000:$a.0" ;;    # bus:slot
+        *)     die "not a PCI address: $a" ;;
+    esac
+    domain=${a%%:*}
+    rest=${a#*:}
+    bus=${rest%%:*}
+    rest=${rest#*:}
+    slot=${rest%%.*}
+    func=${rest#*.}
+    printf '%s:%02x:%02x.%x' "$domain" "$((16#$bus))" "$((16#$slot))" "$((16#$func))"
+}
+
+pci_exists() { [ -d "/sys/bus/pci/devices/$(pci_norm "$1")" ]; }
+
+pci_driver() {
+    # Current kernel driver for a device, or empty.
+    local a
+    a=$(pci_norm "$1") || return 1
+    [ -e "/sys/bus/pci/devices/$a" ] || return 1
+    if [ -L "/sys/bus/pci/devices/$a/driver" ]; then
+        basename "$(readlink "/sys/bus/pci/devices/$a/driver")"
+        return 0
+    fi
+    return 1
+}
+
+pci_ids() {
+    # vendor:device from sysfs (no lspci needed, survives initramfs-free runs).
+    local a v d
+    a=$(pci_norm "$1") || return 1
+    v=$(cat "/sys/bus/pci/devices/$a/vendor" 2>/dev/null) || return 1
+    d=$(cat "/sys/bus/pci/devices/$a/device" 2>/dev/null) || return 1
+    v=${v#0x}; v=${v#0X}; v=${v,,}
+    d=${d#0x}; d=${d#0X}; d=${d,,}
+    printf '%s:%s' "$v" "$d"
+}
+
+pci_vendor() {
+    local a v
+    a=$(pci_norm "$1") || return 1
+    v=$(cat "/sys/bus/pci/devices/$a/vendor" 2>/dev/null) || return 1
+    v=${v#0x}; v=${v#0X}; printf '%s' "${v,,}"
+}
+
+pci_desc() {
+    local a
+    a=$(pci_norm "$1")
+    lspci -s "${a#*:}" 2>/dev/null | sed 's/^[^ ]* *[0-9a-f]*: *//'
+}
+
+iommu_group() {
+    local a
+    a=$(pci_norm "$1")
+    readlink -f "/sys/bus/pci/devices/$a/iommu_group" 2>/dev/null | sed 's#.*/##'
+}
+
+vendor_name() {
+    local v
+    v=$(pci_vendor "$1") || v=""
+    case "$v" in
+        10de) printf 'NVIDIA' ;;
+        1002) printf 'AMD' ;;
+        8086) printf 'Intel' ;;
+        *)    printf 'other' ;;
+    esac
+}
+
+guess_driver() {
+    # Best guess for the host driver a GPU should go back to.
+    local v
+    v=$(pci_vendor "$1") || { printf 'amdgpu'; return; }
+    case "$v" in
+        10de) printf 'nvidia' ;;
+        1002) printf 'amdgpu' ;;
+        8086) printf 'i915'   ;;
+        *)    printf 'amdgpu' ;;
+    esac
+}
+
+active_display_addr() {
+    # Which PCI device drives the host console. Best-effort: the fbcon device
+    # first, falling back to drm card0. Used to auto-pick single vs dual mode.
+    local p m
+    p=$(readlink -f /sys/class/graphics/fb0/device 2>/dev/null || true)
+    if [ -n "$p" ]; then
+        m=$(printf '%s' "$p" | grep -oE '[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]' | head -1 || true)
+        if [ -n "$m" ]; then pci_norm "$m" 2>/dev/null; return 0; fi
+    fi
+    p=$(readlink -f /sys/class/drm/card0/device 2>/dev/null || true)
+    if [ -n "$p" ]; then
+        m=$(printf '%s' "$p" | grep -oE '[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]' | head -1 || true)
+        if [ -n "$m" ]; then pci_norm "$m" 2>/dev/null; return 0; fi
+    fi
+    return 1
+}
+
+is_host_gpu() {
+    local h a
+    h=$(active_display_addr) || return 1
+    a=$(pci_norm "$1") || return 1
+    [ "$h" = "$a" ]
+}
+
+detect_audio() {
+    # Find the audio function that usually rides along with a GPU (.1 or later).
+    local gpu bs f a cls
+    gpu=$(pci_norm "$1")
+    bs=${gpu#*:}
+    bs=${bs%%.*}
+    for f in 1 2 3 4 5 6 7; do
+        a="0000:${bs}.${f}"
+        [ -d "/sys/bus/pci/devices/$a" ] || continue
+        cls=$(cat "/sys/bus/pci/devices/$a/class" 2>/dev/null || true)
+        case "$cls" in
+            0x0403*|0x0401*) printf '%s' "$a"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Fills GPUS[] with "pci|ids|desc|driver|group" lines for every VGA/3D class device.
+GPUS=()
+detect_gpus() {
+    GPUS=()
+    local line pci
+    while IFS= read -r line; do
+        pci=$(pci_norm "$(awk '{print $1}' <<<"$line")")
+        GPUS+=("$pci|$(pci_ids "$pci" 2>/dev/null || echo '??:??')|$(pci_desc "$pci")|$(pci_driver "$pci" || echo none)|$(iommu_group "$pci" || echo '?')")
+    done < <(lspci 2>/dev/null | grep -iE 'vga|3d controller|display controller')
+}
+
+# --- display manager --------------------------------------------------------
+
+dm_detect() {
+    local dm
+    for dm in gdm gdm3 sddm lightdm lxdm xdm display-manager; do
+        if systemctl is-active --quiet "$dm" 2>/dev/null; then
+            printf '%s' "$dm"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# --- host driver load/unload -------------------------------------------------
+
+unload_host_driver() {
+    local drv=$1
+    case "$drv" in
+        nvidia) modprobe -r nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null || true ;;
+        *)      modprobe -r "$drv" 2>/dev/null || true ;;
+    esac
+    modprobe -r nouveau 2>/dev/null || true
+    sleep 1
+}
+
+load_host_driver() {
+    local drv=$1
+    case "$drv" in
+        nvidia)
+            for m in nvidia nvidia_modeset nvidia_uvm nvidia_drm; do
+                modprobe "$m" 2>/dev/null || warn "could not load $m"
+            done
+            ;;
+        *) modprobe "$drv" 2>/dev/null || warn "could not load $drv" ;;
+    esac
+    sleep 1
+}
+
+# --- vfio binding ------------------------------------------------------------
+
+vfio_bind() {
+    local addr cur ids v d
+    addr=$(pci_norm "$1")
+    cur=$(pci_driver "$addr" || true)
+    [ "$cur" = "vfio-pci" ] && { ok "$addr already bound to vfio-pci"; return 0; }
+
+    if [ -n "$cur" ]; then
+        msg "  unbinding $addr from $cur"
+        echo "$addr" > "/sys/bus/pci/drivers/$cur/unbind" 2>/dev/null || {
+            err "could not unbind $addr from $cur"; return 1; }
+        sleep 1
+    fi
+
+    modprobe vfio-pci 2>/dev/null || { err "modprobe vfio-pci failed"; return 1; }
+    ids=$(pci_ids "$addr" 2>/dev/null) || { err "no sysfs ids for $addr"; return 1; }
+    v=${ids%%:*}
+    d=${ids##*:}
+    # new_id is a no-op if already registered; that's fine.
+    echo "$v $d" > /sys/bus/pci/drivers/vfio-pci/new_id 2>/dev/null || true
+    sleep 1
+    if [ ! -L "/sys/bus/pci/drivers/vfio-pci/$addr" ]; then
+        echo "$addr" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || true
+    fi
+    sleep 1
+
+    if [ "$(pci_driver "$addr" || true)" = "vfio-pci" ]; then
+        ok "$addr -> vfio-pci"
+        return 0
+    fi
+    err "$addr did not attach to vfio-pci (still on $(pci_driver "$addr" || echo nothing))"
+    return 1
+}
+
+vfio_unbind() {
+    local addr
+    addr=$(pci_norm "$1")
+    if [ "$(pci_driver "$addr" || true)" != "vfio-pci" ]; then
+        msg "  $addr is not on vfio-pci, skipping"
+        return 0
+    fi
+    echo "$addr" > /sys/bus/pci/drivers/vfio-pci/unbind 2>/dev/null || {
+        err "could not unbind $addr from vfio-pci"; return 1; }
+    ok "$addr released from vfio-pci"
+    return 0
+}
+
+pci_reset() {
+    local a
+    a=$(pci_norm "$1")
+    if [ -w "/sys/bus/pci/devices/$a/reset" ]; then
+        echo 1 > "/sys/bus/pci/devices/$a/reset" 2>/dev/null && ok "pci reset fired for $a" \
+            || warn "reset not permitted for $a (needs a reboot to fully clear)"
+    else
+        warn "no writable reset file for $a (a reboot may be needed)"
+    fi
+}
+
+# --- state -------------------------------------------------------------------
+# The state file remembers what to restore after a release, so `gpupt unbind`
+# doesn't need you to remember which driver the GPU was on.
+#   format: pci|driver_before|dm_before|epoch
+
+save_state() {
+    local addr=$1 drv=$2 dm=$3 tmp
+    mkdir -p "$STATE_DIR"
+    tmp="$STATE_FILE.tmp"
+    [ -f "$STATE_FILE" ] && grep -v "^${addr}|" "$STATE_FILE" > "$tmp" || : > "$tmp"
+    printf '%s|%s|%s|%s\n' "$addr" "$drv" "$dm" "$(date +%s)" >> "$tmp"
+    mv "$tmp" "$STATE_FILE"
+}
+
+state_get() {
+    local addr=$1 field=$2 line
+    addr=$(pci_norm "$addr")
+    line=$(grep "^${addr}|" "$STATE_FILE" 2>/dev/null | tail -1 || true)
+    [ -n "$line" ] || return 1
+    case "$field" in
+        driver) printf '%s' "$line" | awk -F'|' '{print $2}' ;;
+        dm)     printf '%s' "$line" | awk -F'|' '{print $3}' ;;
+    esac
+}
+
+clear_state() {
+    local addr
+    addr=$(pci_norm "$1")
+    [ -f "$STATE_FILE" ] && sed -i "/^${addr}|/d" "$STATE_FILE" 2>/dev/null || true
+}
+
+# --- bind / release core ------------------------------------------------------
+
+# Global knobs consumed by bind_run / release_run.
+BIND_MODE="dual"
+BIND_DRIVER=""
+BIND_NODM=false
+BIND_LATE=false
+BIND_RUN_PCIS=()
+BIND_RUN_DM=""
+
+rollback_bind() {
+    warn "rolling back partial binding"
+    local pci drv
+    for pci in "${BIND_RUN_PCIS[@]}"; do
+        vfio_unbind "$pci" 2>/dev/null || true
+        drv=$(state_get "$pci" driver || true)
+        if [ -n "$drv" ] && [ "$drv" != "none" ]; then
+            modprobe "$drv" 2>/dev/null || warn "could not reload $drv for $pci"
+        fi
+        clear_state "$pci"
+    done
+    if [ -n "$BIND_RUN_DM" ]; then
+        systemctl start "$BIND_RUN_DM" 2>/dev/null || warn "could not restart $BIND_RUN_DM"
+    fi
+}
+
+bind_run() {
+    local pci drv dm
+    BIND_RUN_PCIS=()
+    BIND_RUN_DM=""
+    dm=""
+
+    for pci in "$@"; do
+        pci_exists "$pci" || die "no such PCI device: $pci"
+    done
+
+    if [ "$BIND_MODE" = single ] && ! $BIND_NODM; then
+        dm=$(dm_detect || true)
+        if [ -n "$dm" ]; then
+            warn "stopping display manager ($dm) -- the host screen will go dark"
+            systemctl stop "$dm" 2>/dev/null || {
+                err "failed to stop display manager $dm"; return 1; }
+            sleep 2
+            BIND_RUN_DM="$dm"
+        fi
+    fi
+
+    # Late binding (RX 9000+) wants amdgpu to keep the card initialised, so we
+    # never unload it -- the unbind in vfio_bind is enough.
+    if [ "$BIND_MODE" = single ] && ! $BIND_LATE; then
+        unload_host_driver "$BIND_DRIVER"
+    fi
+
+    for pci in "$@"; do
+        drv=$(pci_driver "$pci" || true)
+        save_state "$pci" "${drv:-none}" "$dm"
+        BIND_RUN_PCIS+=("$pci")
+        if ! vfio_bind "$pci"; then
+            err "failed to bind $pci to vfio-pci"
+            rollback_bind
+            return 1
+        fi
+    done
+    ok "all devices bound to vfio-pci"
+    log "bound ($(printf '%s' "$BIND_MODE")/$(printf '%s' "$BIND_DRIVER")): $*"
+}
+
+release_run() {
+    local pci drv dm
+    for pci in "$@"; do
+        pci_exists "$pci" || { warn "skipping $pci (device not present)"; continue; }
+        vfio_unbind "$pci" || true
+    done
+    modprobe -r vfio-pci 2>/dev/null || true
+    sleep 1
+
+    for pci in "$@"; do
+        drv=$(state_get "$pci" driver || true)
+        if [ -z "$drv" ] || [ "$drv" = "none" ]; then drv="$BIND_DRIVER"; fi
+        if [ -z "$drv" ]; then drv=$(guess_driver "$pci"); fi
+        [ -n "$drv" ] && load_host_driver "$drv"
+        clear_state "$pci"
+    done
+
+    if [ "$BIND_MODE" = single ] && ! $BIND_NODM; then
+        dm=$(state_get "$1" dm || true)
+        [ -z "$dm" ] && dm=$(dm_detect || true)
+        if [ -n "$dm" ]; then
+            info "restarting display manager ($dm)"
+            systemctl start "$dm" 2>/dev/null || warn "could not restart $dm"
+        fi
+    fi
+    ok "devices released from vfio-pci"
+    log "released ($(printf '%s' "$BIND_MODE")/$(printf '%s' "$BIND_DRIVER")): $*"
+}
+
+# --- profile / config ---------------------------------------------------------
+
+cfg_get() {
+    local sec=$1 key=$2
+    [ -f "$CONFIG_FILE" ] || return 1
+    awk -v sec="$sec" -v key="$key" '
+        function trim(s){ gsub(/^[ \t]+|[ \t]+$/,"",s); return s }
+        BEGIN{ section="global" }
+        {
+            if ($0 ~ /^\[/) {
+                line=$0; s=trim(line); sub(/^\[/,"",s); sub(/\]$/,"",s)
+                if (s ~ /^profile[ \t]+"/) {
+                    sub(/^profile[ \t]+"/,"",s); sub(/"$/,"",s); section="profile:" s
+                } else section=s
+                next
+            }
+            if (NF>0 && $0 !~ /^#/ && section==sec) {
+                n=index($0,"=")
+                if (n>0) {
+                    k=trim(substr($0,1,n-1))
+                    if (k==key) { v=trim(substr($0,n+1)); gsub(/^"|"$/,"",v); print v }
+                }
+            }
+        }
+    ' "$CONFIG_FILE"
+}
+
+profile_list() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    grep -E '^\[profile[ \t]+"' "$CONFIG_FILE" 2>/dev/null | sed -E 's/^\[profile[ \t]+"([^"]+)"\].*/\1/'
+}
+
+profile_exists() {
+    local name=$1 line
+    while IFS= read -r line; do
+        [ "$line" = "$name" ] && return 0
+    done <<< "$(profile_list)"
+    return 1
+}
+
+# pf_* globals are the resolved view of a profile.
+pf_vm=""; pf_gpu=""; pf_audio=""; pf_extra=""
+pf_driver=""; pf_mode=""; pf_late=false; pf_onprep=""; pf_onrel=""
+
+read_profile() {
+    local name=$1
+    pf_vm=$(cfg_get "profile:$name" vm)
+    pf_gpu=$(cfg_get "profile:$name" gpu)
+    pf_audio=$(cfg_get "profile:$name" audio)
+    pf_extra=$(cfg_get "profile:$name" extra)
+    pf_driver=$(cfg_get "profile:$name" driver)
+    pf_mode=$(cfg_get "profile:$name" mode)
+    pf_late=false
+    case "$(cfg_get "profile:$name" late_bind)" in 1|true|yes|on) pf_late=true ;; esac
+    pf_onprep=$(cfg_get "profile:$name" on_prepare)
+    pf_onrel=$(cfg_get "profile:$name" on_release)
+    [ -z "$pf_driver" ] && pf_driver=$(guess_driver "$pf_gpu")
+    [ -z "$pf_mode" ] && pf_mode=auto
+}
+
+resolve_mode() {
+    # auto -> single when the GPU drives the host console, else dual.
+    local addr=$1 mode=$2
+    case "$mode" in
+        single|dual) printf '%s' "$mode"; return 0 ;;
+    esac
+    if is_host_gpu "$addr"; then
+        printf 'single'
+    else
+        printf 'dual'
+    fi
+}
+
+need_config_writable() {
+    local dir
+    dir=$(dirname "$CONFIG_FILE")
+    mkdir -p "$dir" 2>/dev/null || { err "cannot create $dir (need root?)"; return 1; }
+    [ -w "$dir" ] || { err "$dir is not writable -- run with sudo or set GPUPT_CONFIG to a user path"; return 1; }
+    if [ -f "$CONFIG_FILE" ] && [ ! -w "$CONFIG_FILE" ]; then
+        err "$CONFIG_FILE is not writable -- run with sudo"; return 1; fi
+    return 0
+}
+
+cfg_append_section() {
+    local name=$1; shift
+    if [ ! -s "$CONFIG_FILE" ]; then
+        printf '# gpupt configuration\n# managed with: gpupt profile add / edit\n\n' > "$CONFIG_FILE"
+    fi
+    {
+        printf '\n[profile "%s"]\n' "$name"
+        local k v
+        while [ $# -gt 0 ]; do
+            k=$1; v=$2; shift 2
+            printf '%s = %s\n' "$k" "$v"
+        done
+    } >> "$CONFIG_FILE"
+}
+
+cfg_set_key() {
+    local name=$1 key=$2 value=$3 tmp
+    tmp=$(mktemp)
+    awk -v name="$name" -v key="$key" -v value="$value" '
+        function trim(s){ gsub(/^[ \t]+|[ \t]+$/,"",s); return s }
+        {
+            if ($0 ~ /^\[/) {
+                line=$0; s=trim(line); sub(/^\[profile[ \t]+"/,"",s); sub(/".*$/,"",s)
+                if (s==name) { print; print key " = " value; insection=1; next }
+                insection=0
+            }
+            if (insection) {
+                n=index($0,"=")
+                if (n>0) {
+                    k=trim(substr($0,1,n-1))
+                    if (k==key) next
+                }
+            }
+            print
+        }
+    ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+}
+
+cfg_drop_section() {
+    local name=$1 tmp
+    tmp=$(mktemp)
+    awk -v name="$name" '
+        function trim(s){ gsub(/^[ \t]+|[ \t]+$/,"",s); return s }
+        BEGIN{ skip=0 }
+        {
+            if ($0 ~ /^\[/) {
+                line=$0; s=trim(line); sub(/^\[profile[ \t]+"/,"",s); sub(/".*$/,"",s)
+                if (s==name) { skip=1; next }
+                skip=0
+            }
+            if (!skip) print
+        }
+    ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+}
+
+sole_profile() {
+    local count
+    count=$(profile_list | wc -l)
+    [ "$count" -eq 1 ] && profile_list | head -1
+}
+
+# --- libvirt helpers ----------------------------------------------------------
+
+vm_has_pci() {
+    # Ask libvirt whether a VM's definition includes this PCI address.
+    local vm=$1 a rest d b s f
+    a=$(pci_norm "$2")
+    d=${a%%:*}; rest=${a#*:}
+    b=${rest%%:*}; rest=${rest#*:}
+    s=${rest%%.*}; f=${rest#*.}
+    virsh dumpxml "$vm" 2>/dev/null | grep -qE \
+        "<address domain='0x${d}' bus='0x${b}' slot='0x${s}' function='0x${f}'"
+}
+
+running_vms_holding() {
+    # Names of running VMs that declare a given PCI device.
+    local addr=$1 vm
+    for vm in $(virsh list --name 2>/dev/null); do
+        if vm_has_pci "$vm" "$addr" && virsh domstate "$vm" 2>/dev/null | grep -q running; then
+            printf '%s\n' "$vm"
+        fi
+    done
+}
+
+print_display() {
+    local disp
+    disp=$(virsh domdisplay "$1" 2>/dev/null || true)
+    [ -n "$disp" ] && printf '  display: %s\n' "$disp"
+}
+
+# --- commands ------------------------------------------------------------------
+
+cmd_help() {
+    cat <<EOF
+gpupt $VERSION -- GPU passthrough automation for KVM/QEMU
+
+Usage: gpupt <command> [options]
+
+Environment check / info
+  doctor [--json]            health check with hints (exit 0 ok, 1 warn, 2 fail)
+  detect [--json|--compact]  list GPUs, ids, drivers, IOMMU groups, audio pair
+  groups [PCI ...]           show IOMMU groups (or the group for given devices)
+  config show                show config file, state and log locations
+
+Profiles
+  profile list
+  profile add NAME [--vm VM] [--gpu PCI] [--audio PCI] [--extra PCI...]
+                    [--driver DRV] [--mode single|dual|auto] [--late-bind]
+                    [--on-prepare CMD] [--on-release CMD]
+                    (no --gpu: interactive wizard)
+  profile show NAME
+  profile edit NAME --set key=value [...]
+  profile rm NAME
+
+Lifecycle
+  bind   [PROFILE | PCI...] [--driver DRV] [--mode M] [--no-dm] [--dry-run]
+  unbind [PROFILE | PCI...] [--driver DRV] [--mode M] [--no-dm] [--dry-run]
+  start  PROFILE [--no-bind]
+  stop   PROFILE [--no-unbind] [--force]
+  status [PROFILE] [--json]
+
+Integration
+  hooks install|remove|status    generate/refresh the libvirt qemu hook
+  recover GPU [AUDIO] [DRIVER]   force-unbind + PCI reset + rebind a stuck GPU
+  log [N]                        show the last N journal lines (default 50)
+  complete [profiles]            shell completion helper
+  version                        print version
+
+Global flags: --quiet, --no-color (also honor NO_COLOR)
+Environment:  GPUPT_CONFIG (default /etc/gpupt/config), GPUPT_STATE,
+              GPUPT_LOG
+
+Examples:
+  gpupt doctor
+  gpupt profile add win11 --gpu 0000:01:00.0 --audio 0000:01:00.1
+  gpupt start win11
+  gpupt stop win11
+  sudo gpupt hooks install
+  gpupt recover 0000:01:00.0 0000:01:00.1 amdgpu
+EOF
+}
+
+cmd_version() {
+    printf 'gpupt %s\n' "$VERSION"
+    printf 'GPU passthrough automation for KVM/QEMU (GPU-Passthrough-for-KVM-QEMU-on-Linux guide)\n'
+}
+
+# ---- doctor -------------------------------------------------------------------
+
+declare -a CHECKS=()
+chk_ok()   { CHECKS+=("ok|$1"); }
+chk_warn() { CHECKS+=("warn|$1"); }
+chk_fail() { CHECKS+=("fail|$1"); }
+
+cmd_doctor() {
+    local json=false
+    [ "${1:-}" = "--json" ] && json=true
+    CHECKS=()
+    local cmdline n vms g drv
+
+    # kernel
+    if grep -qiE 'vmx|svm' /proc/cpuinfo 2>/dev/null; then
+        chk_ok "CPU virtualization (VT-x/AMD-V) supported"
+    else
+        chk_fail "CPU virtualization not detected"
+    fi
+    if [ -e /dev/kvm ]; then
+        chk_ok "/dev/kvm present"
+    else
+        chk_fail "/dev/kvm missing (enable VT-x/AMD-V in BIOS)"
+    fi
+    if [ -d /sys/kernel/iommu_groups ]; then
+        n=$(find /sys/kernel/iommu_groups/* -maxdepth 0 -type d 2>/dev/null | wc -l)
+        chk_ok "IOMMU enabled ($n groups)"
+    else
+        chk_fail "IOMMU groups missing -- enable VT-d/AMD-Vi in BIOS and add kernel params"
+    fi
+    if dmesg 2>/dev/null | grep -qiE 'dmar|amd-vi|vt-d|iommu'; then
+        chk_ok "IOMMU active in dmesg"
+    else
+        chk_warn "IOMMU not visible in dmesg (unprivileged dmesg?)"
+    fi
+
+    # kernel command line
+    cmdline=$(cat /proc/cmdline 2>/dev/null || true)
+    if is_intel; then
+        case "$cmdline" in
+            *intel_iommu=on*) chk_ok "intel_iommu=on present" ;;
+            *) chk_fail "intel_iommu=on missing from kernel cmdline" ;;
+        esac
+    else
+        case "$cmdline" in
+            *amd_iommu=on*) chk_warn "amd_iommu=on is stale (no-op on modern kernels) -- remove it" ;;
+        esac
+        chk_ok "AMD IOMMU comes from the BIOS (AMD-Vi), no flag needed"
+    fi
+    case "$cmdline" in
+        *iommu=pt*) chk_ok "iommu=pt set" ;;
+        *) chk_warn "iommu=pt not set (worth adding for performance)" ;;
+    esac
+    case "$cmdline" in
+        *vfio-pci.ids=*) chk_ok "vfio-pci.ids on the command line (early binding)" ;;
+        *) chk_warn "no vfio-pci.ids on the command line (fine for dynamic/late binding)" ;;
+    esac
+
+    # modules
+    if lsmod 2>/dev/null | grep -q vfio_pci; then
+        chk_ok "vfio-pci loaded"
+    else
+        chk_warn "vfio-pci not loaded (normal if you use dynamic binding)"
+    fi
+    if lsmod 2>/dev/null | grep -q vfio_iommu_type1; then
+        chk_ok "vfio_iommu_type1 loaded"
+    else
+        chk_warn "vfio_iommu_type1 not loaded"
+    fi
+
+    # modprobe config
+    if [ -f /etc/modprobe.d/vfio.conf ]; then
+        chk_ok "/etc/modprobe.d/vfio.conf present"
+        n=$(grep -E '^options vfio-pci' /etc/modprobe.d/vfio.conf 2>/dev/null | head -1 || true)
+        [ -n "$n" ] && chk_ok "  ${n#options }"
+    else
+        chk_warn "/etc/modprobe.d/vfio.conf missing"
+    fi
+
+    # tools
+    for t in lspci virsh qemu-system-x86_64 virt-install; do
+        if command -v "$t" >/dev/null 2>&1; then
+            chk_ok "$t installed"
+        else
+            chk_fail "$t missing"
+        fi
+    done
+
+    # libvirt + VMs
+    if systemctl is-active --quiet libvirtd 2>/dev/null; then
+        chk_ok "libvirtd active"
+    else
+        chk_fail "libvirtd not active"
+    fi
+    vms=$(virsh list --all 2>/dev/null | tail -n +3 | grep -v '^$' || true)
+    if [ -n "$vms" ]; then
+        chk_ok "VMs defined"
+    else
+        chk_warn "no VMs defined yet"
+    fi
+
+    # GPU table
+    detect_gpus
+    if [ ${#GPUS[@]} -eq 0 ]; then
+        chk_fail "no VGA/3D controllers found"
+    else
+        for g in "${GPUS[@]}"; do
+            drv=$(printf '%s' "$g" | awk -F'|' '{print $4}')
+            case "$drv" in
+                vfio-pci)
+                    chk_ok "$(printf '%s' "$g" | awk -F'|' '{print $1" ["$2"] "$3}') -> vfio-pci" ;;
+                none)
+                    chk_warn "$(printf '%s' "$g" | awk -F'|' '{print $1" ["$2"] "$3}') -> no driver" ;;
+                *)
+                    chk_warn "$(printf '%s' "$g" | awk -F'|' '{print $1" ["$2"] "$3}') -> $drv (host)" ;;
+            esac
+        done
+    fi
+
+    # gpupt itself
+    if [ -f "$CONFIG_FILE" ]; then
+        n=$(profile_list | wc -l)
+        chk_ok "gpupt config at $CONFIG_FILE ($n profile(s))"
+    else
+        chk_warn "no gpupt config yet -- create one with: gpupt profile add"
+    fi
+
+    # tally
+    local nok=0 nwarn=0 nfail=0 c kind text
+    for c in "${CHECKS[@]}"; do
+        kind=${c%%|*}
+        text=${c#*|}
+        case "$kind" in
+            ok)   nok=$((nok+1)) ;;
+            warn) nwarn=$((nwarn+1)) ;;
+            fail) nfail=$((nfail+1)) ;;
+        esac
+    done
+
+    if $json; then
+        printf '{"tool":"gpupt","version":"%s","checks":[' "$VERSION"
+        local first=1
+        for c in "${CHECKS[@]}"; do
+            kind=${c%%|*}
+            text=${c#*|}
+            [ $first -eq 1 ] || printf ','
+            first=0
+            printf '{"level":"%s","text":"%s"}' "$kind" "$(printf '%s' "$text" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        done
+        printf '],"summary":{"ok":%d,"warn":%d,"fail":%d}}\n' "$nok" "$nwarn" "$nfail"
+    else
+        printf '\nGPU passthrough doctor (gpupt %s)\n' "$VERSION"
+        printf '%s\n' '=============================='
+        for c in "${CHECKS[@]}"; do
+            kind=${c%%|*}
+            text=${c#*|}
+            case "$kind" in
+                ok)   ok "$text" ;;
+                warn) warn "$text" ;;
+                fail) err "$text" ;;
+            esac
+        done
+        printf '%s\n' '------------------------------'
+        printf '%bOK: %d%b   %bWARN: %d%b   %bFAIL: %d%b\n\n' \
+            "$C_GREEN" "$nok" "$C_NC" "$C_YEL" "$nwarn" "$C_NC" "$C_RED" "$nfail" "$C_NC"
+        if [ "$nfail" -gt 0 ]; then
+            printf 'Fix the failures above, then re-run doctor.\n'
+            printf 'Common ones: IOMMU off in BIOS, intel_iommu missing, missing packages.\n'
+        fi
+    fi
+
+    [ "$nfail" -gt 0 ] && return 2
+    [ "$nwarn" -gt 0 ] && return 1
+    return 0
+}
+
+# ---- detect -------------------------------------------------------------------
+
+cmd_detect() {
+    local json=false compact=false
+    for a in "$@"; do
+        case "$a" in
+            --json) json=true ;;
+            --compact) compact=true ;;
+        esac
+    done
+    need_cmd lspci
+    detect_gpus
+
+    if [ ${#GPUS[@]} -eq 0 ]; then
+        err "no VGA/3D controllers detected (is lspci working?)"
+        return 1
+    fi
+
+    if $json; then
+        printf '{"gpus":['
+        local first=1 g pci ids desc drv grp aud
+        for g in "${GPUS[@]}"; do
+            pci=$(printf '%s' "$g" | awk -F'|' '{print $1}')
+            ids=$(printf '%s' "$g" | awk -F'|' '{print $2}')
+            desc=$(printf '%s' "$g" | awk -F'|' '{print $3}')
+            drv=$(printf '%s' "$g" | awk -F'|' '{print $4}')
+            grp=$(printf '%s' "$g" | awk -F'|' '{print $5}')
+            aud=$(detect_audio "$pci" || echo "")
+            [ $first -eq 1 ] || printf ','
+            first=0
+            printf '{"pci":"%s","ids":"%s","vendor":"%s","desc":"%s","driver":"%s","group":"%s","host_display":%s,"audio":"%s"}' \
+                "$pci" "$ids" "$(vendor_name "$pci")" \
+                "$(printf '%s' "$desc" | sed 's/\\/\\\\/g; s/"/\\"/g')" \
+                "$drv" "$grp" "$(is_host_gpu "$pci" && echo true || echo false)" "$aud"
+        done
+        printf ']}\n'
+        return 0
+    fi
+
+    printf '%s\n' 'Detected VGA/3D controllers:'
+    printf '%s\n' '----------------------------'
+    local i=1 g pci ids desc drv grp aud hs
+    for g in "${GPUS[@]}"; do
+        pci=$(printf '%s' "$g" | awk -F'|' '{print $1}')
+        ids=$(printf '%s' "$g" | awk -F'|' '{print $2}')
+        desc=$(printf '%s' "$g" | awk -F'|' '{print $3}')
+        drv=$(printf '%s' "$g" | awk -F'|' '{print $4}')
+        grp=$(printf '%s' "$g" | awk -F'|' '{print $5}')
+        aud=$(detect_audio "$pci" || echo "")
+        if is_host_gpu "$pci"; then hs="yes"; else hs="no"; fi
+
+        if $compact; then
+            printf '%s  %s  %-9s  group %-3s host=%s%s\n' "$pci" "$ids" "$drv" "$grp" "$hs" "$( [ -n "$aud" ] && printf '  audio=%s' "$aud" )"
+            continue
+        fi
+
+        printf '  %d) %s  [%s]  %s\n' "$i" "$pci" "$ids" "$(vendor_name "$pci")"
+        printf '     %s\n' "$desc"
+        printf '     driver: %s   iommu-group: %s   host-display: %s\n' "$drv" "$grp" "$hs"
+        if [ -n "$aud" ]; then
+            printf '     audio companion: %s [%s]\n' "$aud" "$(pci_ids "$aud" 2>/dev/null || echo '??:??')"
+        fi
+        printf '\n'
+        i=$((i+1))
+    done
+
+    if ! $compact; then
+        printf '%s\n' 'Profile one-liners:'
+        for g in "${GPUS[@]}"; do
+            pci=$(printf '%s' "$g" | awk -F'|' '{print $1}')
+            aud=$(detect_audio "$pci" || echo "")
+            printf '  gpupt profile add <name> --gpu %s' "$pci"
+            [ -n "$aud" ] && printf ' --audio %s' "$aud"
+            printf ' --driver %s\n' "$(guess_driver "$pci")"
+        done
+    fi
+}
+
+# ---- groups -------------------------------------------------------------------
+
+cmd_groups() {
+    need_cmd lspci
+    if [ ! -d /sys/kernel/iommu_groups ]; then
+        die "IOMMU not enabled (/sys/kernel/iommu_groups missing)"
+    fi
+
+    if [ $# -gt 0 ]; then
+        local p a g d da
+        for p in "$@"; do
+            a=$(pci_norm "$p")
+            g=$(iommu_group "$a" || true)
+            if [ -z "$g" ]; then
+                warn "$a has no IOMMU group"
+                continue
+            fi
+            printf '%s  ->  IOMMU group %s\n' "$a" "$g"
+            for d in /sys/kernel/iommu_groups/$g/devices/*; do
+                da=$(basename "$d")
+                if [ "$da" = "$a" ]; then
+                    printf '  %s  %s   %s\n' '*' "$da" "$(pci_desc "$da")"
+                else
+                    printf '  %s  %s   %s\n' ' ' "$da" "$(pci_desc "$da")"
+                fi
+            done
+        done
+        printf '\n%s\n' '* marks the device you asked about'
+        return 0
+    fi
+
+    local g d da n
+    n=$(find /sys/kernel/iommu_groups/* -maxdepth 0 -type d 2>/dev/null | wc -l)
+    printf 'IOMMU groups: %d total\n\n' "$n"
+    for g in $(find /sys/kernel/iommu_groups/* -maxdepth 0 -type d | sort -V); do
+        printf 'IOMMU group %s:\n' "${g##*/}"
+        for d in $g/devices/*; do
+            da=$(basename "$d")
+            printf '  %s   %s\n' "$da" "$(pci_desc "$da")"
+        done
+        printf '\n'
+    done
+}
+
+# ---- profile ------------------------------------------------------------------
+
+cmd_profile() {
+    local sub=${1:-list}
+    shift || true
+    case "$sub" in
+        list) profile_cmd_list ;;
+        add)  profile_cmd_add "$@" ;;
+        show) profile_cmd_show "${1:-}" ;;
+        edit) profile_cmd_edit "$@" ;;
+        rm|remove|delete) profile_cmd_rm "${1:-}" ;;
+        -h|--help|help)
+            printf 'usage: gpupt profile list|add|show|edit|rm\n'
+            return 0
+            ;;
+        *) err "unknown profile command: $sub"; return 2 ;;
+    esac
+}
+
+profile_cmd_list() {
+    local n name
+    n=$(profile_list)
+    if [ -z "$n" ]; then
+        warn "no profiles defined yet -- add one with: gpupt profile add"
+        return 0
+    fi
+    printf '%-18s %-18s %s\n' 'PROFILE' 'VM' 'GPU'
+    while IFS= read -r name; do
+        printf '%-18s %-18s %s\n' "$name" "$(cfg_get "profile:$name" vm)" "$(cfg_get "profile:$name" gpu)"
+    done <<< "$n"
+}
+
+wizard() {
+    # Interactive part of `profile add`. Fills vm/gpu/audio/mode/driver.
+    need_cmd lspci
+    detect_gpus
+    [ ${#GPUS[@]} -gt 0 ] || die "no GPUs detected"
+    printf '%s\n' 'Detected GPUs:'
+    local i g dm yn dd
+    for i in "${!GPUS[@]}"; do
+        g=${GPUS[$i]}
+        printf '  [%d] %s  [%s]\n      %s\n' \
+            $((i+1)) \
+            "$(printf '%s' "$g" | awk -F'|' '{print $1}')" \
+            "$(printf '%s' "$g" | awk -F'|' '{print $2}')" \
+            "$(printf '%s' "$g" | awk -F'|' '{print $3}')"
+    done
+    local pick
+    read -r -p "  GPU to pass through [1-${#GPUS[@]}]: " pick
+    case "$pick" in
+        ''|*[!0-9]*) die "invalid selection: $pick" ;;
+    esac
+    [ "$pick" -ge 1 ] && [ "$pick" -le "${#GPUS[@]}" ] || die "selection out of range"
+    gpu=$(printf '%s' "${GPUS[$((pick-1))]}" | awk -F'|' '{print $1}')
+    printf '  selected: %s\n' "$gpu"
+
+    dm=$(dm_detect || true)
+    if [ -n "$dm" ]; then
+        read -r -p "  Running display manager: $dm. Does this GPU drive your host screen? [y/N]: " yn
+        case "${yn,,}" in
+            y|yes) mode=single ;;
+            *) mode=dual ;;
+        esac
+    else
+        printf '%s\n' '  no display manager detected -- assuming dual-GPU (set mode=single manually if needed)'
+        mode=dual
+    fi
+    read -r -p "  Host driver to restore on release [auto/amdgpu/nvidia] [$driver]: " dd
+    [ -n "$dd" ] && driver=$dd
+    read -r -p "  VM name [$vm]: " vv
+    [ -n "$vv" ] && vm=$vv
+}
+
+profile_cmd_add() {
+    local name=${1:-}
+    shift || true
+    [ -n "$name" ] || die "usage: gpupt profile add NAME [--vm VM] [--gpu PCI] [--audio PCI] [--driver DRV] [--mode M] ..."
+    need_config_writable || die
+    profile_exists "$name" && die "profile '$name' already exists (use: gpupt profile edit)"
+
+    vm="win11-gpu"; gpu=""; audio=""; extra=""
+    driver=""; mode="auto"; late=false; onprep=""; onrel=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --vm) vm=$2; shift 2 ;;
+            --gpu) gpu=$2; shift 2 ;;
+            --audio) audio=$2; shift 2 ;;
+            --extra) extra=$2; shift 2 ;;
+            --driver) driver=$2; shift 2 ;;
+            --mode) mode=$2; shift 2 ;;
+            --late-bind) late=true; shift ;;
+            --on-prepare) onprep=$2; shift 2 ;;
+            --on-release) onrel=$2; shift 2 ;;
+            -h|--help)
+                printf 'usage: gpupt profile add NAME [--vm VM] [--gpu PCI] [--audio PCI]\n'
+                printf '       [--extra PCI...] [--driver nvidia|amdgpu] [--mode single|dual|auto]\n'
+                printf '       [--late-bind] [--on-prepare CMD] [--on-release CMD]\n'
+                return 0 ;;
+            *) err "unknown option: $1"; return 2 ;;
+        esac
+    done
+
+    if [ -z "$gpu" ]; then wizard; fi
+    gpu=$(pci_norm "$gpu")
+    [ -n "$audio" ] && audio=$(pci_norm "$audio")
+    [ -z "$audio" ] && audio=$(detect_audio "$gpu" || true)
+    [ -z "$driver" ] && driver=$(guess_driver "$gpu")
+    [ -z "$mode" ] && mode=auto
+
+    local args=(vm "$vm" gpu "$gpu" mode "$mode" driver "$driver")
+    [ -n "$audio" ] && args+=(audio "$audio")
+    [ -n "$extra" ] && args+=(extra "$extra")
+    $late && args+=(late_bind true)
+    [ -n "$onprep" ] && args+=(on_prepare "$onprep")
+    [ -n "$onrel" ] && args+=(on_release "$onrel")
+    cfg_append_section "$name" "${args[@]}"
+
+    ok "profile '$name' added"
+    if is_host_gpu "$gpu" && [ "$mode" = auto ]; then
+        warn "$gpu looks like your host display GPU -- expect mode=single (host screen goes dark while the VM runs)"
+    fi
+    printf '  next steps:  gpupt status %s\n' "$name"
+    printf '               sudo gpupt hooks install   (optional, auto-bind on VM start)\n'
+    printf '               gpupt start %s\n' "$name"
+}
+
+profile_cmd_show() {
+    local name=$1 k v
+    [ -n "$name" ] || die "usage: gpupt profile show NAME"
+    profile_exists "$name" || die "profile '$name' not found"
+    printf '[profile "%s"]\n' "$name"
+    for k in vm gpu audio extra driver mode late_bind on_prepare on_release; do
+        v=$(cfg_get "profile:$name" "$k")
+        [ -n "$v" ] && printf '  %s = %s\n' "$k" "$v"
+    done
+    return 0
+}
+
+profile_cmd_edit() {
+    local name=${1:-}
+    shift || true
+    [ -n "$name" ] || die "usage: gpupt profile edit NAME --set key=value [...]"
+    need_config_writable || die
+    profile_exists "$name" || die "profile '$name' not found"
+    [ $# -gt 0 ] || die "usage: gpupt profile edit NAME --set key=value [...]"
+
+    local kv k v
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --set)
+                [ $# -ge 2 ] || die "--set needs key=value"
+                kv=$2
+                k=${kv%%=*}
+                v=${kv#*=}
+                case "$k" in
+                    vm|gpu|audio|extra|driver|mode|late_bind|on_prepare|on_release) : ;;
+                    *) err "unknown key: $k"; return 2 ;;
+                esac
+                if [ "$k" = gpu ] || [ "$k" = audio ]; then
+                    v=$(pci_norm "$v" 2>/dev/null || printf '%s' "$v")
+                fi
+                cfg_set_key "$name" "$k" "$v"
+                ok "set $name.$k = $v"
+                shift 2
+                ;;
+            *) err "unknown option: $1"; return 2 ;;
+        esac
+    done
+}
+
+profile_cmd_rm() {
+    local name=${1:-} yn
+    [ -n "$name" ] || die "usage: gpupt profile rm NAME"
+    need_config_writable || die
+    profile_exists "$name" || die "profile '$name' not found"
+    read -r -p "delete profile '$name'? [y/N]: " yn
+    case "${yn,,}" in
+        y|yes) : ;;
+        *) warn "aborted"; return 0 ;;
+    esac
+    cfg_drop_section "$name"
+    ok "profile '$name' removed"
+}
+
+# ---- bind / unbind -------------------------------------------------------------
+
+bind_usage() {
+    printf 'usage: gpupt bind [PROFILE | PCI...] [--driver DRV] [--mode M] [--no-dm] [--dry-run]\n'
+    printf '       gpupt unbind [PROFILE | PCI...] [--driver DRV] [--mode M] [--no-dm] [--dry-run]\n'
+}
+
+cmd_bind() {
+    local dry=false profile="" flag_driver="" flag_mode="" positional=()
+    BIND_NODM=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) dry=true; shift ;;
+            --no-dm) BIND_NODM=true; shift ;;
+            --driver) [ $# -ge 2 ] || die "--driver needs a value"; flag_driver=$2; shift 2 ;;
+            --mode) [ $# -ge 2 ] || die "--mode needs a value"; flag_mode=$2; shift 2 ;;
+            --) shift; while [ $# -gt 0 ]; do positional+=("$1"); shift; done ;;
+            -h|--help) bind_usage; return 0 ;;
+            -*) err "unknown option: $1"; bind_usage; return 2 ;;
+            *) positional+=("$1"); shift ;;
+        esac
+    done
+    set -- "${positional[@]}"
+    [ $# -gt 0 ] || { err "nothing to bind -- give a profile or PCI addresses"; bind_usage; return 2; }
+
+    if profile_exists "$1"; then
+        profile=$1
+        read_profile "$profile"
+        BIND_MODE=$(resolve_mode "$pf_gpu" "$pf_mode")
+        BIND_DRIVER=$pf_driver
+        BIND_LATE=$pf_late
+        pcis="$pf_gpu $pf_audio $pf_extra"
+    else
+        if [[ "$1" != *:* ]]; then
+            err "no profile named '$1' and it does not look like a PCI address"
+            bind_usage
+            return 2
+        fi
+        BIND_MODE=$(resolve_mode "$1" "${flag_mode:-auto}")
+        BIND_DRIVER=${flag_driver:-$(guess_driver "$1")}
+        BIND_LATE=false
+        pcis="$*"
+    fi
+    set -- $pcis; pcis="$*"
+    [ -n "$pcis" ] || die "profile '$profile' has no GPU devices configured"
+
+    local a vm
+    for a in $pcis; do
+        for vm in $(running_vms_holding "$a"); do
+            die "VM '$vm' is running and holds $a -- stop it first (gpupt stop $vm)"
+        done
+    done
+
+    if $dry; then
+        printf '%s\n' "dry run -- would:"
+        printf '  devices : %s\n' "$pcis"
+        printf '  mode    : %s\n' "$BIND_MODE"
+        printf '  driver  : %s\n' "$BIND_DRIVER"
+        printf '  late    : %s\n' "$BIND_LATE"
+        if [ "$BIND_MODE" = single ] && ! $BIND_NODM; then
+            printf '  stop the display manager and hand the GPU to vfio-pci\n'
+        fi
+        return 0
+    fi
+
+    need_root
+    bind_run $pcis
+}
+
+cmd_unbind() {
+    local dry=false profile="" flag_driver="" flag_mode="" positional=()
+    BIND_NODM=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) dry=true; shift ;;
+            --no-dm) BIND_NODM=true; shift ;;
+            --driver) [ $# -ge 2 ] || die "--driver needs a value"; flag_driver=$2; shift 2 ;;
+            --mode) [ $# -ge 2 ] || die "--mode needs a value"; flag_mode=$2; shift 2 ;;
+            --) shift; while [ $# -gt 0 ]; do positional+=("$1"); shift; done ;;
+            -h|--help) bind_usage; return 0 ;;
+            -*) err "unknown option: $1"; bind_usage; return 2 ;;
+            *) positional+=("$1"); shift ;;
+        esac
+    done
+    set -- "${positional[@]}"
+    [ $# -gt 0 ] || { err "nothing to release -- give a profile or PCI addresses"; bind_usage; return 2; }
+
+    if profile_exists "$1"; then
+        profile=$1
+        read_profile "$profile"
+        BIND_MODE=$(resolve_mode "$pf_gpu" "$pf_mode")
+        BIND_DRIVER=$pf_driver
+        BIND_LATE=$pf_late
+        pcis="$pf_gpu $pf_audio $pf_extra"
+    else
+        if [[ "$1" != *:* ]]; then
+            err "no profile named '$1' and it does not look like a PCI address"
+            bind_usage
+            return 2
+        fi
+        BIND_MODE=$(resolve_mode "$1" "${flag_mode:-auto}")
+        BIND_DRIVER=${flag_driver:-$(guess_driver "$1")}
+        BIND_LATE=false
+        pcis="$*"
+    fi
+    set -- $pcis; pcis="$*"
+    [ -n "$pcis" ] || die "profile '$profile' has no GPU devices configured"
+
+    if $dry; then
+        printf '%s\n' "dry run -- would:"
+        printf '  devices : %s\n' "$pcis"
+        printf '  driver  : %s\n' "$BIND_DRIVER"
+        if [ "$BIND_MODE" = single ] && ! $BIND_NODM; then
+            printf '  restore the host driver and restart the display manager\n'
+        fi
+        return 0
+    fi
+
+    need_root
+    release_run $pcis
+}
+
+# ---- start / stop --------------------------------------------------------------
+
+cmd_start() {
+    local profile="" no_bind=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-bind) no_bind=true; shift ;;
+            -h|--help) printf 'usage: gpupt start PROFILE [--no-bind]\n'; return 0 ;;
+            -*) err "unknown option: $1"; return 2 ;;
+            *) profile=$1; shift ;;
+        esac
+    done
+    need_root
+    [ -n "$profile" ] || profile=$(sole_profile) || die "no profile given and more than one exists (use: gpupt profile list)"
+    profile_exists "$profile" || die "profile '$profile' not found"
+    read_profile "$profile"
+    [ -n "$pf_vm" ] || die "profile '$profile' has no vm"
+    [ -n "$pf_gpu" ] || die "profile '$profile' has no gpu"
+
+    virsh dominfo "$pf_vm" >/dev/null 2>&1 || die "VM '$pf_vm' is not defined in libvirt"
+
+    if virsh domstate "$pf_vm" 2>/dev/null | grep -q running; then
+        warn "VM '$pf_vm' is already running"
+        virsh domstate "$pf_vm" | sed 's/^/  state: /'
+        print_display "$pf_vm"
+        return 0
+    fi
+
+    local a vm
+    for a in $pf_gpu $pf_audio $pf_extra; do
+        for vm in $(running_vms_holding "$a"); do
+            die "VM '$vm' is running and holds $a -- stop it first (gpupt stop $vm)"
+        done
+    done
+
+    if ! $no_bind; then
+        BIND_MODE=$(resolve_mode "$pf_gpu" "$pf_mode")
+        BIND_DRIVER=$pf_driver
+        BIND_LATE=$pf_late
+        bind_run $pf_gpu $pf_audio $pf_extra || return 1
+        [ -n "$pf_onprep" ] && { info "running on_prepare hook"; eval "$pf_onprep" || warn "on_prepare exited non-zero"; }
+    fi
+
+    virsh start "$pf_vm" || { err "virsh start failed"; return 1; }
+    ok "VM '$pf_vm' started"
+    log "started $pf_vm (profile $profile)"
+    print_display "$pf_vm"
+}
+
+cmd_stop() {
+    local profile="" no_unbind=false force=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-unbind) no_unbind=true; shift ;;
+            --force) force=true; shift ;;
+            -h|--help) printf 'usage: gpupt stop PROFILE [--no-unbind] [--force]\n'; return 0 ;;
+            -*) err "unknown option: $1"; return 2 ;;
+            *) profile=$1; shift ;;
+        esac
+    done
+    need_root
+    [ -n "$profile" ] || profile=$(sole_profile) || die "no profile given and more than one exists (use: gpupt profile list)"
+    profile_exists "$profile" || die "profile '$profile' not found"
+    read_profile "$profile"
+    [ -n "$pf_vm" ] || die "profile '$profile' has no vm"
+
+    local state i
+    state=$(virsh domstate "$pf_vm" 2>/dev/null || echo "unknown")
+    if printf '%s' "$state" | grep -q running; then
+        if $force; then
+            warn "force-stopping $pf_vm"
+            virsh destroy "$pf_vm" || die "virsh destroy failed"
+            sleep 2
+        else
+            info "shutting down $pf_vm (ACPI)"
+            virsh shutdown "$pf_vm" >/dev/null 2>&1 || true
+            for i in $(seq 1 30); do
+                virsh domstate "$pf_vm" 2>/dev/null | grep -q running || break
+                sleep 2
+            done
+            if virsh domstate "$pf_vm" 2>/dev/null | grep -q running; then
+                warn "clean shutdown timed out, forcing destroy"
+                virsh destroy "$pf_vm" || die "virsh destroy failed"
+                sleep 2
+            fi
+        fi
+        ok "VM '$pf_vm' stopped"
+    else
+        warn "VM '$pf_vm' is not running"
+    fi
+    log "stopped $pf_vm (profile $profile)"
+
+    if ! $no_unbind; then
+        BIND_MODE=$(resolve_mode "$pf_gpu" "$pf_mode")
+        BIND_DRIVER=$pf_driver
+        BIND_LATE=$pf_late
+        release_run $pf_gpu $pf_audio $pf_extra || return 1
+        [ -n "$pf_onrel" ] && { info "running on_release hook"; eval "$pf_onrel" || warn "on_release exited non-zero"; }
+    fi
+}
+
+# ---- status --------------------------------------------------------------------
+
+cmd_status() {
+    local json=false profile="" pci ids drv exp vms g
+    for a in "$@"; do
+        case "$a" in
+            --json) json=true ;;
+            *) [ -z "$profile" ] && profile=$a ;;
+        esac
+    done
+
+    if [ -n "$profile" ]; then
+        profile_exists "$profile" || die "profile '$profile' not found"
+        read_profile "$profile"
+        local state mode driver
+        state=$(virsh domstate "$pf_vm" 2>/dev/null || echo "no libvirt")
+        mode=$(resolve_mode "$pf_gpu" "$pf_mode")
+        driver=$pf_driver
+
+        if $json; then
+            printf '{"profile":"%s","vm":"%s","state":"%s","mode":"%s","driver":"%s","devices":[' \
+                "$profile" "$pf_vm" "$state" "$mode" "$driver"
+            local first=1
+            for pci in $pf_gpu $pf_audio $pf_extra; do
+                exp="vfio-pci"
+                drv=$(pci_driver "$pci" || echo none)
+                [ $first -eq 1 ] || printf ','
+                first=0
+                printf '{"pci":"%s","driver":"%s","expected":"%s"}' "$pci" "$drv" "$exp"
+            done
+            printf ']}\n'
+            return 0
+        fi
+
+        printf 'profile : %s\n' "$profile"
+        printf '  vm     : %s (%s)\n' "$pf_vm" "$state"
+        printf '  mode   : %s\n' "$mode"
+        printf '  driver : %s\n' "$driver"
+        for pci in $pf_gpu $pf_audio $pf_extra; do
+            drv=$(pci_driver "$pci" || echo none)
+            if [ "$drv" = "vfio-pci" ]; then
+                printf '  %-14s %s   %s\n' "$pci" "$drv" '(ready for the VM)'
+            else
+                printf '  %-14s %s   %s\n' "$pci" "$drv" '(waiting to be bound)'
+            fi
+        done
+        if [ -f "$CONFIG_FILE" ]; then
+            printf '  config : %s\n' "$CONFIG_FILE"
+        fi
+        return 0
+    fi
+
+    if $json; then
+        printf '{"vms":'
+        if command -v virsh >/dev/null 2>&1; then
+            virsh list --all 2>/dev/null | tail -n +3 | grep -v '^$' \
+                | sed 's/^[ \t]*//' | awk '{printf "%s%s{\"name\":\"%s\",\"state\":\"%s\"}", (NR>1?",":""), "", $1, (NF>=3?$3:""); for(i=4;i<=NF;i++) printf " \"%s\"", $i; printf "}"}'
+        else
+            printf '[]'
+        fi
+        printf ',"gpus":['
+        need_cmd lspci
+        detect_gpus
+        local first=1
+        for g in "${GPUS[@]}"; do
+            pci=$(printf '%s' "$g" | awk -F'|' '{print $1}')
+            ids=$(printf '%s' "$g" | awk -F'|' '{print $2}')
+            drv=$(printf '%s' "$g" | awk -F'|' '{print $4}')
+            [ $first -eq 1 ] || printf ','
+            first=0
+            printf '{"pci":"%s","ids":"%s","driver":"%s"}' "$pci" "$ids" "$drv"
+        done
+        printf ']}\n'
+        return 0
+    fi
+
+    printf '%s\n' 'VMs:'
+    if command -v virsh >/dev/null 2>&1; then
+        virsh list --all 2>/dev/null || warn "virsh failed -- is libvirt running?"
+    else
+        warn "virsh not installed"
+    fi
+    printf '\n%s\n' 'GPUs:'
+    if command -v lspci >/dev/null 2>&1; then
+        detect_gpus
+        if [ ${#GPUS[@]} -eq 0 ]; then
+            warn "no VGA/3D controllers found"
+        else
+            printf '%-16s %-10s %-9s  %s\n' 'PCI' 'ids' 'driver' 'desc'
+            for g in "${GPUS[@]}"; do
+                printf '%-16s %-10s %-9s  %s\n' \
+                    "$(printf '%s' "$g" | awk -F'|' '{print $1}')" \
+                    "$(printf '%s' "$g" | awk -F'|' '{print $2}')" \
+                    "$(printf '%s' "$g" | awk -F'|' '{print $4}')" \
+                    "$(printf '%s' "$g" | awk -F'|' '{print $3}')"
+            done
+        fi
+    else
+        warn "lspci not installed"
+    fi
+    printf '\nprofiles: %s\n' "$(profile_list | tr '\n' ' ')"
+}
+
+# ---- hooks ---------------------------------------------------------------------
+
+cmd_hooks() {
+    local sub=${1:-status}
+    shift || true
+    case "$sub" in
+        install) hooks_install ;;
+        remove|rm) hooks_remove ;;
+        status) hooks_status ;;
+        -h|--help) printf 'usage: gpupt hooks install|remove|status\n'; return 0 ;;
+        *) err "unknown hooks command: $sub"; return 2 ;;
+    esac
+}
+
+hooks_install() {
+    need_root
+    if [ "$(profile_list | wc -l)" -eq 0 ]; then
+        die "no profiles defined -- hooks have nothing to manage (gpupt profile add)"
+    fi
+    need_cmd virsh
+
+    local hook=/etc/libvirt/hooks/qemu
+    mkdir -p "$(dirname "$hook")"
+    if [ -f "$hook" ]; then
+        cp "$hook" "$hook.bak" && ok "backed up existing hook to $hook.bak"
+    fi
+
+    local self quoted tmp
+    self=$(readlink -f "$0" 2>/dev/null || true)
+    [ -n "$self" ] || self=$(command -v gpupt 2>/dev/null || true)
+    [ -n "$self" ] || self="$0"
+    quoted=$(printf '%q' "$self")
+    tmp=$(mktemp)
+
+    {
+        printf '%s\n' '#!/bin/bash'
+        printf '%s\n' '# auto-generated by "gpupt hooks install" -- do not edit by hand.'
+        printf '%s\n' '# refresh after changing profiles:  sudo gpupt hooks install'
+        printf '%s\n' "GPUP=$quoted"
+        printf '%s\n' 'if [ ! -x "$GPUP" ]; then GPUP=$(command -v gpupt 2>/dev/null || true); fi'
+        printf '%s\n' '[ -z "$GPUP" ] && exit 0'
+        printf '%s\n' ''
+        printf '%s\n' 'case "$1" in'
+        local name vm
+        while IFS= read -r name; do
+            vm=$(cfg_get "profile:$name" vm)
+            [ -n "$vm" ] || continue
+            printf '  "%s")\n' "$vm"
+            printf '    case "$2" in\n'
+            printf '      prepare|reconnect)\n'
+            printf '        exec "$GPUP" bind "%s" --quiet\n' "$name"
+            printf '        ;;\n'
+            printf '      release|stopped)\n'
+            printf '        exec "$GPUP" unbind "%s" --quiet\n' "$name"
+            printf '        ;;\n'
+            printf '    esac\n'
+            printf '    ;;\n'
+        done <<< "$(profile_list)"
+        printf '%s\n' 'esac'
+    } > "$tmp"
+    chmod +x "$tmp"
+    mv "$tmp" "$hook"
+
+    ok "installed libvirt hook: $hook"
+    printf '%s\n' '  it will bind/unbind the GPU on these VM events:'
+    while IFS= read -r name; do
+        printf '  - %s (VM %s)\n' "$name" "$(cfg_get "profile:$name" vm)"
+    done <<< "$(profile_list)"
+    printf '%s\n' '  remove with:  sudo gpupt hooks remove'
+}
+
+hooks_remove() {
+    need_root
+    local hook=/etc/libvirt/hooks/qemu
+    if [ ! -f "$hook" ]; then
+        warn "no hook installed"
+        return 0
+    fi
+    mv "$hook" "$hook.removed-$(date +%s)"
+    ok "removed $hook"
+}
+
+hooks_status() {
+    local hook=/etc/libvirt/hooks/qemu
+    if [ -x "$hook" ]; then
+        ok "hook installed: $hook"
+        local vms
+        vms=$(grep -oE '^  "[^"]+"\)' "$hook" 2>/dev/null | sed 's/^  "\(.*\)")/\1/' || true)
+        if [ -n "$vms" ]; then
+            printf '  managed VMs:\n'
+            printf '  - %s\n' "$vms"
+        fi
+    else
+        warn "no hook installed"
+        printf '  install with:  sudo gpupt hooks install\n'
+    fi
+}
+
+# ---- recover -------------------------------------------------------------------
+
+cmd_recover() {
+    [ $# -ge 1 ] || die "usage: gpupt recover GPU [AUDIO] [DRIVER]"
+    need_root
+    need_cmd lspci
+    need_cmd virsh
+
+    local gpu audio="" drv=""
+    gpu=$(pci_norm "$1")
+    [ $# -ge 2 ] && audio=$(pci_norm "$2")
+    [ $# -ge 3 ] && drv=$3
+    [ -z "$drv" ] && drv=$(guess_driver "$gpu")
+
+    info "recovering $gpu (audio: ${audio:-none}, driver: $drv)"
+
+    local vm
+    for vm in $(virsh list --name 2>/dev/null); do
+        if vm_has_pci "$vm" "$gpu" && virsh domstate "$vm" 2>/dev/null | grep -q running; then
+            warn "VM '$vm' still holds $gpu -- stopping it"
+            virsh destroy "$vm" 2>/dev/null || true
+            sleep 2
+        fi
+    done
+
+    vfio_unbind "$gpu" || true
+    [ -n "$audio" ] && vfio_unbind "$audio" || true
+    pci_reset "$gpu"
+    [ -n "$audio" ] && pci_reset "$audio"
+    modprobe -r vfio-pci 2>/dev/null || true
+    sleep 1
+    load_host_driver "$drv"
+
+    local dm
+    dm=$(dm_detect || true)
+    if [ -n "$dm" ]; then
+        systemctl start "$dm" 2>/dev/null || warn "could not start $dm"
+    fi
+
+    printf '%s\n' 'current state:'
+    printf '  %s -> %s\n' "$gpu" "$(pci_driver "$gpu" || echo 'no driver')"
+    [ -n "$audio" ] && printf '  %s -> %s\n' "$audio" "$(pci_driver "$audio" || echo 'no driver')"
+    ok "recovery finished"
+    log "recovered $gpu (audio=${audio:-none}, driver=$drv)"
+}
+
+# ---- log / config / complete ----------------------------------------------------
+
+cmd_log() {
+    local n=${1:-50}
+    if [ ! -f "$LOGFILE" ]; then
+        err "no log file at $LOGFILE yet"
+        return 1
+    fi
+    if [ -r "$LOGFILE" ]; then
+        tail -n "$n" "$LOGFILE"
+    else
+        sudo tail -n "$n" "$LOGFILE" 2>/dev/null || err "cannot read $LOGFILE (run with sudo)"
+    fi
+}
+
+cmd_config() {
+    local sub=${1:-show}
+    case "$sub" in
+        show)
+            printf 'config : %s\n' "$CONFIG_FILE"
+            printf 'state  : %s\n' "$STATE_FILE"
+            printf 'log    : %s\n' "$LOGFILE"
+            if [ -f "$CONFIG_FILE" ]; then
+                printf '%s\n' '---'
+                cat "$CONFIG_FILE"
+            else
+                printf '%s\n' '(config file does not exist yet -- gpupt profile add will create it)'
+            fi
+            ;;
+        -h|--help) printf 'usage: gpupt config show\n'; return 0 ;;
+        *) err "unknown config command: $sub"; return 2 ;;
+    esac
+}
+
+cmd_complete() {
+    case "${1:-}" in
+        profiles)
+            profile_list
+            ;;
+        *)
+            printf '%s\n' doctor detect groups profile bind unbind release start stop status hooks recover log config complete version
+            ;;
+    esac
+}
+
+# ---- main ----------------------------------------------------------------------
+
+main() {
+    rotate_log
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --quiet|-q) QUIET=true; shift ;;
+            --no-color) C_RED='' C_GREEN='' C_YEL='' C_CYN='' C_NC=''; shift ;;
+            -h|--help|help) cmd_help; exit 0 ;;
+            -V|--version|version) cmd_version; exit 0 ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+
+    [ $# -gt 0 ] || { cmd_help; exit 1; }
+
+    local cmd=$1
+    shift || true
+    case "$cmd" in
+        doctor)   cmd_doctor "$@" ;;
+        detect)   cmd_detect "$@" ;;
+        groups)   cmd_groups "$@" ;;
+        profile)  cmd_profile "$@" ;;
+        bind)     cmd_bind "$@" ;;
+        unbind|release) cmd_unbind "$@" ;;
+        start)    cmd_start "$@" ;;
+        stop)     cmd_stop "$@" ;;
+        status)   cmd_status "$@" ;;
+        hooks)    cmd_hooks "$@" ;;
+        recover)  cmd_recover "$@" ;;
+        log)      cmd_log "$@" ;;
+        config)   cmd_config "$@" ;;
+        complete) cmd_complete "$@" ;;
+        *)
+            err "unknown command: $cmd"
+            cmd_help
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"
