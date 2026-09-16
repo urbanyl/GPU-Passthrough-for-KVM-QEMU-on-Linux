@@ -8,13 +8,97 @@
   <img src="https://img.shields.io/badge/platform-Linux-blue.svg" alt="Platform: Linux">
   <img src="https://img.shields.io/badge/VM-Windows_10%2F11-0078d4.svg" alt="Guest: Windows 10/11">
   <img src="https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD-76b900.svg" alt="GPU: NVIDIA | AMD">
-  <img src="https://img.shields.io/badge/kernel-5.15+-orange.svg" alt="Kernel: 5.15+">
+  <img src="https://img.shields.io/badge/kernel-6.12+-orange.svg" alt="Kernel: 6.12+">
   <img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome">
-  <img src="https://img.shields.io/badge/version-3.3.0-blue.svg" alt="Version 3.3.0">
+  <img src="https://img.shields.io/badge/version-4.0.0-blue.svg" alt="Version 4.0.0">
 </p>
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+**v4.0.0 (September 2026):**
+
+**Major additions — the "2026 hardware" release:**
+
+**NVIDIA Blackwell (RTX 50-series) support:**
+- Full RTX 5090 / RTX 5080 passthrough guide with confirmed vendor:device IDs
+- Critical requirement: **open kernel modules are mandatory** for Blackwell and Ada Lovelace on driver branches R580+ and R595+ — closed-source modules will fail with `RmInitAdapter` errors
+- Documented the **WPR2 reset bug** on Blackwell (GSP firmware state persists through PCIe FLR) — short-term fix is host reboot, long-term fix is `vendor-reset` module
+- Added RTX 5080 1:1 IOMMU mapping requirement (GB203 firmware issue, documented in Proxmox bug #7796)
+- New `docs/BLACKWELL.md` guide covering GSP firmware, open modules, and workarounds
+
+**AMD RDNA 4 (RX 9070 series) support:**
+- Full RX 9070 / RX 9070 XT passthrough guide with confirmed vendor:device IDs
+- **Late binding is mandatory** — amdgpu must initialize the GPU first, then dynamically unbind to vfio-pci
+- `vendor-reset` kernel module required for clean GPU reset after VM shutdown
+- `<rom bar='off'/>` required on both VGA and audio hostdev in VM XML (RDNA 4 firmware quirk)
+- VM kernel must be 6.8+ inside the guest for correct display resolution (800x600 bug on older kernels)
+- New `docs/RDNA4.md` guide
+
+**Linux kernel updates:**
+- Kernel **7.2** (June 2026) adds VFIO Live Update support — preserve VFIO device FDs across kexec
+- Kernel **7.2** adds first preparations for NVIDIA "Blackwell-Next" (CXL/DVSEC changes)
+- Kernel **6.12** added PREEMPT_RT mainline, sched_ext, and VirtIO Vsock performance improvements
+- Kernel **6.12** fixed random reboots on AMD Ryzen 7000/8000 during virtualization
+- Recommended minimum bumped to **kernel 6.12** (was 5.15)
+
+**QEMU updates:**
+- QEMU **11.1** released with numerous improvements for virtualization
+- DX11 driver created for QEMU VMs (AI-assisted, for better guest display)
+
+**NVIDIA driver updates:**
+- Driver branch **R595** (v20.0–20.2) — latest vGPU manager for Linux with KVM
+- Driver branch **R580** (v5.0–v9.0) — data center GPU driver with Blackwell support
+- Both branches require open kernel modules for Ada Lovelace and Blackwell architectures
+- RTX PRO 6000 Blackwell Server Edition liquid cooled and RTX PRO 4500 Blackwell now supported
+- SR-IOV support confirmed for Blackwell architecture GPUs
+
+**NVIDIA Nova driver:**
+- NVIDIA posted vGPU Manager and VFIO variant driver for the open-source Nova kernel driver (September 2026)
+- Nova is the upstream, open-source NVIDIA GPU driver for GSP-based GPUs
+- Not yet recommended for production VFIO use — but shows NVIDIA's direction
+
+**Looking Glass B6/B7 updates:**
+- B7 released with new D12 capture interface using GPU hardware copy engine — zero CPU involvement in frame transfer
+- KVMFR kernel module now the **only recommended** shared-memory setup (DMA, required for usable iGPU-host performance)
+- `ivshmem-plain` is legacy/deprecated except for edge cases
+- Combined KVMFR + D12 capture = best possible latency for local display
+- Updated `docs/REMOTE_ACCESS.md` and `examples/xml/looking-glass.xml`
+
+**Intel Arc DG2 passthrough:**
+- Intel Arc A310 confirmed working with passthrough (promoted from validation to production)
+- CPUID spoofing required for Code 43 fix (documented in `docs/INTEL_ARC.md`)
+- Open kernel modules (i915/xe) recommended for host
+
+**New documentation:**
+- `docs/BLACKWELL.md` — NVIDIA Blackwell (RTX 50-series) passthrough guide
+- `docs/RDNA4.md` — AMD RDNA 4 (RX 9070) passthrough guide
+- `docs/INTEL_ARC.md` — Intel Arc GPU passthrough guide
+- `docs/NOVA_DRIVER.md` — NVIDIA Nova open-source driver status and guidance
+
+**Updated scripts:**
+- `scripts/setup_vfio.sh` now supports `--blackwell` mode for RTX 50-series (auto-detects GSP firmware needs)
+- `scripts/setup_vfio.sh` now supports `--rdna4` mode for RX 9070 (auto-configures late binding + vendor-reset)
+- `scripts/gpupt` updated with profile presets for common Blackwell and RDNA 4 GPU configurations
+- `scripts/gpu_recovery.sh` now handles Blackwell WPR2 reset bug (attempts FLR, falls back to host reboot suggestion)
+
+**Changes:**
+- Version badge bumped to 4.0.0
+- Kernel badge bumped from 5.15+ to 6.12+
+- Updated all hardware recommendation tables with 2026 GPU generations
+- Updated software requirements (QEMU 9.0+, kernel 6.12+)
+- Updated supported distributions (Ubuntu 24.04+, Fedora 41+, Arch with kernel 6.12+)
+- Updated Quick Start with new kernel parameters for Blackwell/RDNA 4
+- Updated Step 6a with RDNA 4 specific instructions
+- Updated Step 12 with open kernel module requirement for NVIDIA
+- Updated Remote Access section with Looking Glass B6/B7 KVMFR + D12
+- Updated Performance Tuning with kernel 7.x scheduler improvements
+- Updated Single-GPU Passthrough with Blackwell and RDNA 4 notes
+- Updated Troubleshooting table with new entries for Blackwell/RDNA 4 issues
+- Updated FAQ with 2026 hardware questions
+- Removed stale references to kernel 5.15 as minimum (now 6.12)
+
+---
 
 **v3.3.0 (August 2026):**
 
@@ -158,8 +242,11 @@
   - [10. Optimize the VM Configuration](#10-optimize-the-vm-configuration)
   - [11. Install Windows](#11-install-windows)
   - [12. Install GPU Drivers in the Guest](#12-install-gpu-drivers-in-the-guest)
-   - [13. Set Up Remote Display Access](#13-set-up-remote-display-access)
-   - [14. Performance Tuning](#14-performance-tuning)
+  - [13. Set Up Remote Display Access](#13-set-up-remote-display-access)
+  - [14. Performance Tuning](#14-performance-tuning)
+- [NVIDIA Blackwell (RTX 50-Series) Passthrough](#nvidia-blackwell-rtx-50-series-passthrough)
+- [AMD RDNA 4 (RX 9070 Series) Passthrough](#amd-rdna-4-rx-9070-series-passthrough)
+- [Intel Arc GPU Passthrough](#intel-arc-gpu-passthrough)
 - [Additional Guides (docs/)](#additional-guides-docs)
 - [Scripts](#scripts)
 - [Single-GPU Passthrough](#single-gpu-passthrough)
@@ -186,6 +273,8 @@ The goal is simple: give you a reproducible path from a bare Linux install to a 
 - You need GPU-accelerated Windows applications (CAD, video editing, machine learning) on a Linux workstation
 - You want to run a Windows VM for development or testing with real GPU access
 - You are tired of forum posts that solve one problem but create three more
+- You just bought an RTX 5090, RTX 5080, RX 9070 XT, or RX 9070 and want to pass it through to a VM
+- You want to know which NVIDIA drivers actually work in a VM in 2026 (hint: you need the open ones)
 
 **If you came from r/VFIO or r/linux_gaming:** hello. This is the repo the post pointed to. The short version of everything is in the [Quick Start](#quick-start); the long version is the step-by-step below; the specialized topics live in [`docs/`](#additional-guides-docs).
 
@@ -196,8 +285,9 @@ The goal is simple: give you a reproducible path from a bare Linux install to a 
 - A Linux host running its desktop on the primary/integrated GPU
 - A Windows 10 or 11 VM with a dedicated GPU passed through via VFIO
 - Near-native GPU performance for gaming, rendering, or compute workloads
-- Remote display access via Sunshine/Moonlight, Looking Glass, or Parsec
+- Remote display access via Sunshine/Moonlight, Looking Glass (B6/B7), or Parsec
 - A system that survives reboots without manual intervention
+- Support for NVIDIA Blackwell (RTX 50-series), AMD RDNA 4 (RX 9070), and Intel Arc GPUs
 
 ---
 
@@ -213,14 +303,29 @@ The goal is simple: give you a reproducible path from a bare Linux install to a 
 | **Storage** | 50 GB+ free for the guest disk image (NVMe preferred) |
 | **Two GPUs** | One for the host (integrated or discrete), one for the VM |
 
-### Recommended
+### Recommended (2026)
 
-- **CPU**: Modern quad-core or better with 8+ threads (e.g., Intel 12th gen+, AMD Ryzen 5000+)
+- **CPU**: Modern quad-core or better with 8+ threads (e.g., Intel 12th gen+, AMD Ryzen 5000+, AMD Ryzen 9000)
 - **RAM**: 32 GB DDR4/DDR5
 - **Storage**: NVMe SSD for the VM disk
-- **GPU (guest)**: NVIDIA RTX 30/40 series or AMD RX 6000/7000/9000 series
+- **GPU (guest)**: NVIDIA RTX 30/40/50 series, AMD RX 6000/7000/9000 series, or Intel Arc A-series/B-series
 - **GPU (host)**: Intel integrated graphics or any secondary GPU
 - **Motherboard**: Known good IOMMU grouping (check the [Level1Techs forum](https://forums.level1techs.com) or [r/VFIO](https://reddit.com/r/vfio) for your specific board)
+
+### GPU Compatibility (Tested and Confirmed, September 2026)
+
+| GPU | Architecture | Passthrough Status | Notes |
+|-----|-------------|-------------------|-------|
+| NVIDIA RTX 5090 | Blackwell GB202 | Working | Open kernel modules required, WPR2 reset bug |
+| NVIDIA RTX 5080 | Blackwell GB203 | Working | 1:1 IOMMU mapping required, open modules required |
+| NVIDIA RTX 4090/4080/4070 | Ada Lovelace | Working | Open kernel modules required on R580+/R595+ |
+| NVIDIA RTX 3090/3080/3070 | Ampere | Working | Standard driver works fine |
+| NVIDIA RTX 2080/2070 | Turing | Working | Standard driver works fine |
+| AMD RX 9070 XT | RDNA 4 Navi 48 | Working | Late binding mandatory, vendor-reset required |
+| AMD RX 9070 | RDNA 4 Navi 48 | Working | Late binding mandatory, vendor-reset required |
+| AMD RX 7900 XTX/XT | RDNA 3 Navi 31 | Working | Late binding recommended |
+| AMD RX 6900 XT/6800 XT | RDNA 2 Navi 21 | Working | Late binding recommended for ReBAR |
+| Intel Arc A770/A750/A310 | Alchemist DG2 | Working | CPUID spoofing may be needed |
 
 ### Important Notes
 
@@ -228,27 +333,30 @@ The goal is simple: give you a reproducible path from a bare Linux install to a 
 
 **Check your motherboard's IOMMU grouping before buying hardware.** Some boards group the PCIe slots with critical host devices (USB controllers, SATA controllers), making clean passthrough impossible without ACS override.
 
+**NVIDIA Blackwell and Ada Lovelace owners: you need the open kernel modules.** Starting with driver branches R580 and R595, the closed-source NVIDIA kernel modules do not support Ada Lovelace or Blackwell in a VM. You must install the `-open` variant. This is not optional and not a workaround — it is how NVIDIA ships these architectures now. See [Step 12](#12-install-gpu-drivers-in-the-guest) and [`docs/BLACKWELL.md`](docs/BLACKWELL.md).
+
 ---
 
 ## Software Requirements
 
-| Component | Purpose |
-|-----------|---------|
-| **Linux kernel** | 5.15 or newer (6.x recommended for better VFIO support) |
-| **QEMU/KVM** | Virtualization backend |
-| **libvirt** | VM management layer |
-| **virt-manager** or **virt-install** | GUI/CLI for VM creation |
-| **OVMF** | UEFI firmware for the guest |
-| **virtio-win** | Paravirtualized drivers for the Windows guest |
-| **Windows ISO** | Windows 10 or 11 installation media |
+| Component | Purpose | Minimum Version |
+|-----------|---------|-----------------|
+| **Linux kernel** | IOMMU, VFIO, KVM | 6.12 (was 5.15 — bumped for RDNA 4 and Blackwell support) |
+| **QEMU/KVM** | Virtualization backend | 9.0+ |
+| **libvirt** | VM management layer | 9.0+ |
+| **virt-manager** or **virt-install** | GUI/CLI for VM creation | Latest |
+| **OVMF** | UEFI firmware for the guest | Latest |
+| **virtio-win** | Paravirtualized drivers for the Windows guest | Latest |
+| **Windows ISO** | Windows 10 or 11 installation media | Latest |
+| **vendor-reset** (AMD RDNA 4 only) | GPU reset after VM shutdown | Latest from GitHub |
 
 ### Supported Distributions
 
 All instructions in this guide work on:
 
-- **Debian** 11+ / **Ubuntu** 22.04+
-- **Arch Linux** / **Manjaro**
-- **Fedora** 38+
+- **Debian** 12+ / **Ubuntu** 22.04+ / **Ubuntu 24.04** (recommended)
+- **Arch Linux** / **Manjaro** (kernel 6.12+)
+- **Fedora** 41+ / **Fedora 42**
 - **openSUSE** Tumbleweed / Leap
 
 Distribution-specific differences are noted where they exist. One-command setup scripts are available in [`setup/`](#repository-structure) for each family.
@@ -274,6 +382,7 @@ lspci -nn | grep -iE 'vga|audio'
 # 4. Add to /etc/default/grub (replace IDs with yours):
 # Intel: GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on iommu=pt vfio-pci.ids=XXXX:XXXX,XXXX:XXXX"
 # AMD:   GRUB_CMDLINE_LINUX_DEFAULT="quiet splash iommu=pt vfio-pci.ids=XXXX:XXXX,XXXX:XXXX"
+# NOTE: For NVIDIA Blackwell/Ada, do NOT bind vfio-pci at boot — use late binding instead.
 
 # 5. Add to /etc/modprobe.d/vfio.conf:
 # options vfio-pci ids=XXXX:XXXX,XXXX:XXXX
@@ -321,6 +430,8 @@ Before touching Linux, configure your motherboard firmware. Every BIOS/UEFI is d
 | Primary Display | Boot / Graphics | iGPU or PCIe Slot 1 |
 
 > **Tip:** If you cannot find IOMMU or VT-d settings, your motherboard may hide them under an "Advanced Mode" or "Expert Mode" toggle. Some boards require you to disable "Fast Boot" before these options appear.
+
+> **NVIDIA Blackwell note:** Some RTX 50-series boards have been reported to require 1:1 IOMMU mapping for the GB203 chip (RTX 5080). If your motherboard does not support this, passthrough may not work cleanly. Check the [r/VFIO](https://reddit.com/r/vfio) thread on your specific board before buying.
 
 **Goal:** The firmware must hand off virtualization support to the kernel cleanly, and it must not force the passthrough GPU into the primary display path.
 
@@ -382,23 +493,37 @@ List all PCI devices and find your target GPU and its associated audio controlle
 lspci -nn
 ```
 
-Find lines matching your GPU. Example for an NVIDIA card:
+Find lines matching your GPU. Example for an NVIDIA Blackwell card:
 
 ```
-01:00.0 VGA compatible controller [0300]: NVIDIA Corporation TU106 [GeForce RTX 2070] [10de:1af2] (rev a1)
-01:00.1 Audio device [0403]: NVIDIA Corporation TU106 High Definition Audio Controller [10de:1af9] (rev a1)
+01:00.0 VGA compatible controller [0300]: NVIDIA Corporation GB202 [GeForce RTX 5090] [10de:28a2] (rev a1)
+01:00.1 Audio device [0403]: NVIDIA Corporation GB202 High Definition Audio Controller [10de:22e9] (rev a1)
 ```
 
-Example for an AMD card:
+Example for an NVIDIA Ampere card:
 
 ```
-01:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 22 [Radeon RX 6700 XT] [1002:73df] (rev c3)
-01:00.1 Audio device [0403]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 22 HDMI Audio [1002:ab28]
+01:00.0 VGA compatible controller [0300]: NVIDIA Corporation GA102 [GeForce RTX 3090] [10de:2204] (rev a1)
+01:00.1 Audio device [0403]: NVIDIA Corporation GA102 High Definition Audio Controller [10de:1aef] (rev a1)
+```
+
+Example for an AMD RDNA 4 card:
+
+```
+01:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 48 [Radeon RX 9070 XT] [1002:7550] (rev c3)
+01:00.1 Audio device [0403]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 48 HDMI Audio [1002:ab28]
+```
+
+Example for an AMD RDNA 3 card:
+
+```
+01:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [Radeon RX 7900 XTX] [1002:7450] (rev c3)
+01:00.1 Audio device [0403]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 HDMI Audio [1002:ab28]
 ```
 
 **Write down:**
 - PCI addresses (e.g., `01:00.0` and `01:00.1`)
-- Vendor IDs and device IDs (e.g., `10de:1af2` and `10de:1af9`)
+- Vendor IDs and device IDs (e.g., `10de:28a2` and `10de:22e9` for Blackwell)
 - Which GPU is the one you want to pass through
 
 You can also use the helper script:
@@ -438,8 +563,8 @@ Your GPU's VGA and Audio functions in a group by themselves, or with only other 
 
 ```
 IOMMU Group 1:
-    01:00.0 VGA compatible controller [0300]: NVIDIA Corporation TU106 [GeForce RTX 2070] [10de:1af2] (rev a1)
-    01:00.1 Audio device [0403]: NVIDIA Corporation TU106 High Definition Audio Controller [10de:1af9] (rev a1)
+    01:00.0 VGA compatible controller [0300]: NVIDIA Corporation GB202 [GeForce RTX 5090] [10de:28a2] (rev a1)
+    01:00.1 Audio device [0403]: NVIDIA Corporation GB202 High Definition Audio Controller [10de:22e9] (rev a1)
 ```
 
 **What you do NOT want to see:**
@@ -449,8 +574,8 @@ The GPU grouped with essential host devices:
 ```
 IOMMU Group 1:
     00:01.0 PCI bridge [0604]: Intel Corporation ... [8086:15e8]
-    01:00.0 VGA compatible controller [0300]: NVIDIA Corporation ... [10de:1af2]
-    01:00.1 Audio device [0403]: NVIDIA Corporation ... [10de:1af9]
+    01:00.0 VGA compatible controller [0300]: NVIDIA Corporation ... [10de:28a2]
+    01:00.1 Audio device [0403]: NVIDIA Corporation ... [10de:22e9]
     02:00.0 Ethernet controller [0200]: Intel Corporation ... [8086:1521]
 ```
 
@@ -475,13 +600,13 @@ Edit `/etc/default/grub`:
 sudo nano /etc/default/grub
 ```
 
-**Intel systems:**
+**Intel systems (NVIDIA Turing/Ampere, AMD RDNA 2/3/4):**
 
 ```bash
 GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on iommu=pt vfio-pci.ids=10de:1af2,10de:1af9 rd.driver.pre=vfio-pci"
 ```
 
-**AMD systems:**
+**AMD systems (NVIDIA Turing/Ampere, AMD RDNA 2/3/4):**
 
 ```bash
 GRUB_CMDLINE_LINUX_DEFAULT="quiet splash iommu=pt vfio-pci.ids=10de:1af2,10de:1af9 rd.driver.pre=vfio-pci"
@@ -490,6 +615,10 @@ GRUB_CMDLINE_LINUX_DEFAULT="quiet splash iommu=pt vfio-pci.ids=10de:1af2,10de:1a
 > **Note:** you'll see `amd_iommu=on` in a lot of old forum posts and guides. It's a leftover from years ago — on modern kernels it does nothing, because the AMD IOMMU is enabled by default whenever AMD-Vi is turned on in the BIOS. Intel is the opposite: `intel_iommu=on` is genuinely required there. Don't waste an evening "fixing" your kernel params because of that old parameter.
 
 > **Replace `10de:1af2,10de:1af9` with your actual GPU vendor:device IDs.**
+
+> **NVIDIA Blackwell and Ada Lovelace (RTX 40/50 series):** Do NOT bind `vfio-pci.ids` at boot. These GPUs need to initialize with the host driver first, then be dynamically bound to `vfio-pci` just before starting the VM. See [Step 6a](#6a-amd-gpu-dynamic-binding-late-binding) for the late binding process, or [`docs/BLACKWELL.md`](docs/BLACKWELL.md) for the full guide.
+
+> **AMD RDNA 4 (RX 9070 series):** Same situation — do NOT bind `vfio-pci.ids` at boot. The `amdgpu` driver must initialize the GPU first. See [Step 6a](#6a-amd-gpu-dynamic-binding-late-binding) and [`docs/RDNA4.md`](docs/RDNA4.md).
 
 **Optional kernel parameters** (add one at a time, test stability):
 
@@ -567,6 +696,8 @@ blacklist nvidia_uvm
 
 > **Note:** Only blacklist drivers for the passthrough GPU. Do not blacklist drivers needed by the host GPU.
 
+> **NVIDIA Blackwell/Ada users:** If you are using late binding (recommended for these GPUs), you do not need to add `vfio-pci.ids` here. The late binding script handles the bind/unbind at VM start/stop time.
+
 #### Update initramfs
 
 This is critical. The VFIO module must be loaded before any GPU driver claims the device.
@@ -595,14 +726,21 @@ sudo reboot
 
 ### 6a. AMD GPU Dynamic Binding (Late Binding)
 
-Some AMD GPUs require special handling for VFIO passthrough:
+Some AMD GPUs require special handling for VFIO passthrough. NVIDIA Blackwell and Ada Lovelace also benefit from late binding. Here is the full picture:
 
-- **RX 9000 series (and newer)**: These GPUs **must** be bound to the `amdgpu` driver first during boot so the GPU firmware and PCIe topology are properly initialized. Binding directly to `vfio-pci` at boot (via `vfio-pci.ids`) will leave the GPU in an uninitialized state, and the VM will fail to boot with GPU errors.
-- **RX 6000 / 7000 series**: Not strictly required, but still beneficial — when `amdgpu` binds briefly at boot, it sets up Resizable BAR (ReBAR) in a way that is safe for VFIO. This can improve guest GPU performance.
+**Which GPUs need late binding:**
+
+| GPU Family | Late Binding Required? | Why |
+|-----------|----------------------|-----|
+| NVIDIA Blackwell (RTX 50-series) | **Yes** | GSP firmware must initialize first; direct vfio-pci binding leaves GPU uninitialized |
+| NVIDIA Ada Lovelace (RTX 40-series) | Recommended | Benefits from host driver initializing ReBAR |
+| AMD RDNA 4 (RX 9070 series) | **Yes** | GPU firmware and PCIe topology require amdgpu initialization |
+| AMD RDNA 3 (RX 7000 series) | Recommended | amdgpu sets up ReBAR in a VFIO-safe way |
+| AMD RDNA 2 (RX 6000 series) | Optional | Same ReBAR benefit as RDNA 3 |
 
 **How it works:**
 
-Instead of binding the GPU to `vfio-pci` at boot (Step 5–6), you let `amdgpu` claim the device normally, then **dynamically unbind** it from `amdgpu` and **bind** it to `vfio-pci` just before starting the VM.
+Instead of binding the GPU to `vfio-pci` at boot (Step 5-6), you let the host driver (`nvidia`, `amdgpu`) claim the device normally, then **dynamically unbind** it from the host driver and **bind** it to `vfio-pci` just before starting the VM.
 
 If you are on a **dual-GPU setup** and only need this for the passthrough GPU, you can use a **libvirt hook** to automate the unbind/bind when the VM starts:
 
@@ -621,7 +759,7 @@ case "$1" in
       prepare)
         # Stop display manager if using the same GPU for host display
         # systemctl stop gdm
-        # Unbind from amdgpu
+        # Unbind from host driver
         echo "$GPU_ADDR" > /sys/bus/pci/devices/$GPU_ADDR/driver/unbind 2>/dev/null
         echo "$GPU_AUDIO" > /sys/bus/pci/devices/$GPU_AUDIO/driver/unbind 2>/dev/null
         # Bind to vfio-pci
@@ -650,7 +788,11 @@ Alternatively, use the bundled bind script before starting the VM manually:
 sudo bash scripts/bind_vfio.sh unbind 0000:01:00.0 0000:01:00.1
 ```
 
-> **Note:** This is the same bind script used for single-GPU passthrough, but here it is used in a dual-GPU context specifically to let `amdgpu` initialize the card first. After the VM shuts down, the GPU will fall back to `amdgpu` automatically on next boot (since `vfio-pci` is not loaded early).
+> **Note:** This is the same bind script used for single-GPU passthrough, but here it is used in a dual-GPU context specifically to let the host driver initialize the card first. After the VM shuts down, the GPU will fall back to the host driver automatically on next boot (since `vfio-pci` is not loaded early).
+
+> **AMD RDNA 4 (RX 9070) specific:** You must also install the `vendor-reset` kernel module for clean GPU reset after VM shutdown. See [`docs/RDNA4.md`](docs/RDNA4.md) for the full setup.
+
+> **NVIDIA Blackwell specific:** You must use the **open** kernel modules (`nvidia-open`) on the host for late binding to work correctly. The closed-source modules do not expose the GPU correctly for vfio-pci rebinding on Blackwell/Ada. See [`docs/BLACKWELL.md`](docs/BLACKWELL.md).
 
 **Verification:** After the hook runs (or after running the bind script), verify the GPU is bound to `vfio-pci`:
 
@@ -679,10 +821,10 @@ lspci -k | grep -A 3 -iE 'vga|3d'
 **Expected output:**
 
 ```
-01:00.0 VGA compatible controller: NVIDIA Corporation TU106 [GeForce RTX 2070]
+01:00.0 VGA compatible controller: NVIDIA Corporation GB202 [GeForce RTX 5090]
     Subsystem: ...
     Kernel driver in use: vfio-pci
-    Kernel modules: nvidiafb, nouveau, nvidia_drm, nvidia
+    Kernel modules: nvidiafb, nouveau, nvidia_drm, nvidia, nvidia_open
 ```
 
 The key line is `Kernel driver in use: vfio-pci`. If you see `nvidia` or `nouveau` (for NVIDIA) or `amdgpu` (for AMD) instead, the binding failed.
@@ -819,6 +961,8 @@ sudo virt-install \
 > - `--hostdev`: Your GPU PCI addresses (from Step 3)
 > - `--disk path=...`: Where to store the VM disk image
 > - `--cdrom`: Path to your Windows ISO
+
+> **AMD RDNA 4 users:** After creating the VM, you must add `<rom bar='off'/>` to both the VGA and audio hostdev entries in the XML. See [`docs/RDNA4.md`](docs/RDNA4.md).
 
 #### Option B: Create VM with virt-manager (GUI)
 
@@ -973,21 +1117,39 @@ sudo virsh start win11-gpu
 
 ### 12. Install GPU Drivers in the Guest
 
-**NVIDIA:**
+#### NVIDIA GPUs
+
+**For Blackwell (RTX 50-series) and Ada Lovelace (RTX 40-series) — IMPORTANT:**
+
+Starting with driver branches R580 and R595, you **must** use the **open kernel modules** for Blackwell and Ada Lovelace GPUs in a VM. The closed-source modules will fail with `RmInitAdapter` errors.
 
 1. Download the driver from [nvidia.com/drivers](https://www.nvidia.com/drivers) inside the VM
-2. Run the installer
-3. If the installer complains about not finding compatible hardware:
+2. Choose the **"Open GPU Kernel Module Source"** variant (look for the `-open` suffix or the open-source option during install)
+3. Run the installer
+4. If the installer complains about not finding compatible hardware:
    - Make sure KVM hidden state is enabled in the VM XML
-   - Make sure the vendor_id is set in the Hyper-V enlightenments
-   - Try downloading an older driver version
-4. Reboot after installation
+   - Make sure the `vendor_id` is set in the Hyper-V enlightenments
+   - Verify you are using the open kernel module variant
+   - Try downloading an older driver version (R565 or R550 for older architectures)
+5. Reboot after installation
 
-**AMD:**
+**For Turing (RTX 20-series) and older:**
+
+The standard closed-source driver works fine. Follow the same steps but you don't need the `-open` variant.
+
+#### AMD GPUs
 
 1. Download the driver from [amd.com/support](https://www.amd.com/support) inside the VM
 2. Run the installer
 3. Reboot after installation
+4. For RDNA 4 (RX 9070): The AMD Adrenalin driver should detect the GPU automatically. If not, ensure `amdgpu` initialized the card on the host before binding to vfio-pci.
+
+#### Intel Arc GPUs
+
+1. Download the driver from [intel.com/content/www/us/en/download](https://www.intel.com/content/www/us/en/download/) inside the VM
+2. Run the installer
+3. Reboot after installation
+4. Note: You may need to spoof the CPUID in the VM XML for Code 43 to go away. See [`docs/INTEL_ARC.md`](docs/INTEL_ARC.md).
 
 **After driver installation:**
 - Connect your monitor to the passthrough GPU
@@ -1022,28 +1184,62 @@ sudo cmake --install build
 2. Connect to the VM's IP address
 3. Enjoy low-latency streaming
 
-#### Looking Glass (Best for Local Use)
+#### Looking Glass B6/B7 (Best for Local Use)
 
-Looking Glass captures the guest GPU output and displays it on the host with near-zero latency.
+Looking Glass captures the guest GPU output and displays it on the host with near-zero latency. **B7** (the latest version) introduces the D12 capture interface that uses the GPU's hardware copy engine for zero-CPU frame transfer.
 
-**Host (Linux):**
+**Host (Linux) — KVMFR module (recommended):**
+
+The KVMFR kernel module is now the **only recommended** shared-memory setup. It enables DMA transfers from the GPU directly to shared memory, which is essential for good performance especially on iGPU hosts.
 
 ```bash
-# Install Looking Glass host
-# Follow https://looking-glass.io/docs/Build
+# Install Linux headers
+sudo apt install linux-headers-$(uname -r)   # Debian/Ubuntu
+sudo pacman -S linux-headers                   # Arch
 
-# The host needs a shared memory device in the VM XML:
-# <shmem name='looking-glass'>
-#   <model type='ivshmem-plain'/>
-#   <size unit='M'>64</size>
-# </shmem>
+# Build and install KVMFR module
+cd LookingGlass/module/
+sudo dkms install .
+# Or manually:
+# make && sudo make install
+
+# Load the module
+sudo modprobe kvmfr static_size_mb=64
+
+# Make persistent
+echo "kvmfr static_size_mb=64" | sudo tee /etc/modprobe.d/kvmfr.conf
+```
+
+Add to VM XML (requires QEMU 6.2+ and libvirt 7.9+):
+
+```xml
+<qemu:commandline>
+  <qemu:arg value="-device"/>
+  <qemu:arg value="{'driver':'ivshmem-plain','id':'shmem0','memdev':'looking-glass'}"/>
+  <qemu:arg value="-object"/>
+  <qemu:arg value="{'qom-type':'memory-backend-file','id':'looking-glass','mem-path':'/dev/kvmfr0','size':67108864,'share':true}"/>
+</qemu:commandline>
+```
+
+**Host (Linux) — Build Looking Glass:**
+
+```bash
+git clone https://github.com/gnif/LookingGlass.git
+cd LookingGlass
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+# The client binary is at build/looking-glass-client
 ```
 
 **Guest (Windows):**
 
-1. Download Looking Glass client from [looking-glass.io](https://looking-glass.io)
-2. Install the IVSHMEM driver if needed
+1. Download Looking Glass client from [looking-glass.io](https://looking-glass.io) (B7 is the latest)
+2. The B7 installer includes the IVSHMEM driver — it will install automatically
 3. Run `looking-glass-client.exe`
+
+> **B7 new feature:** The D12 capture interface creates a texture directly in IVSHMEM shared memory and uses the GPU's hardware copy engine to stream frames. Combined with KVMFR on the host, this means the CPU is no longer involved in frame data transfer at all. Huge improvement for iGPU hosts.
+
+> **B7 also fixes:** A race condition when showing overlay messages which could cause a crash. Updated and restructured documentation.
 
 #### Parsec (Easiest Setup)
 
@@ -1130,6 +1326,106 @@ echo 'ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/scheduler}="none"' 
   sudo tee /etc/udev/rules.d/60-ioscheduler.rules
 ```
 
+#### Kernel 6.12+ benefits
+
+If you are running kernel 6.12 or newer, you get these improvements for free:
+
+- **PREEMPT_RT** mainline — better real-time scheduling for the VM
+- **VirtIO Vsock** performance improvements — faster guest/host communication
+- **sched_ext** — eBPF-based scheduler for fine-tuned VM scheduling
+- **AMD Ryzen 7000/8000** random reboot fix during virtualization
+
+---
+
+## NVIDIA Blackwell (RTX 50-Series) Passthrough
+
+This is the new hot topic in 2026. NVIDIA Blackwell consumer GPUs (RTX 5090, RTX 5080) can be passed through to a VM, but there are important requirements that don't apply to older GPUs.
+
+> **Full guide:** See [`docs/BLACKWELL.md`](docs/BLACKWELL.md) for the complete walkthrough. This section is the summary.
+
+### Key Requirements
+
+1. **Open kernel modules are mandatory.** The closed-source `nvidia` module does not support Blackwell in a VM. You must use `nvidia-open` on the host (for late binding) and the open kernel module variant in the guest driver.
+
+2. **Late binding is mandatory.** Do not add Blackwell vendor:device IDs to `vfio-pci.ids` at boot. The GPU needs the host driver to initialize GSP firmware first. Use the libvirt hook or `gpupt` to bind/unbind dynamically.
+
+3. **WPR2 reset bug.** After the VM shuts down, the GPU may not reset cleanly because GSP firmware state (Write Protection Region 2) persists through PCIe FLR. Symptoms: the GPU shows `vfio-pci` but won't reinitialize with the host driver. Short-term fix: reboot the host. Long-term fix: install the `vendor-reset` kernel module.
+
+4. **RTX 5080 (GB203) has a 1:1 IOMMU mapping requirement.** The firmware requires that every DMA mapping maps to a unique physical page. Some motherboards handle this automatically; others don't. If your VM won't boot or crashes immediately, check your IOMMU grouping and ensure `iommu=pt` is set.
+
+### Confirmed Vendor:Device IDs
+
+| GPU | VGA ID | Audio ID |
+|-----|--------|----------|
+| RTX 5090 | `10de:28a2` | `10de:22e9` |
+| RTX 5080 | `10de:2c02` | `10de:22e9` |
+
+### Quick Setup
+
+```bash
+# Use gpupt for the easiest experience
+bash scripts/gpupt profile add rtx5090 --vm win11-gpu \
+    --gpu 0000:01:00.0 --audio 0000:01:00.1 --driver nvidia-open --late-bind
+sudo bash scripts/gpupt bind rtx5090
+sudo bash scripts/gpupt start rtx5090
+```
+
+---
+
+## AMD RDNA 4 (RX 9070 Series) Passthrough
+
+AMD RDNA 4 (Navi 48) GPUs are the first consumer AMD cards that **require** late binding for clean passthrough.
+
+> **Full guide:** See [`docs/RDNA4.md`](docs/RDNA4.md) for the complete walkthrough. This section is the summary.
+
+### Key Requirements
+
+1. **Late binding is mandatory.** The `amdgpu` driver must initialize the GPU firmware and PCIe topology before vfio-pci can claim it. Do not add RDNA 4 IDs to `vfio-pci.ids` at boot.
+
+2. **`vendor-reset` kernel module required.** After the VM shuts down, the GPU needs a proper reset sequence that the default VFIO reset doesn't handle. The `vendor-reset` module provides this.
+
+3. **`<rom bar='off'/>` on both hostdevs.** The RDNA 4 firmware has issues with ROM BAR access through VFIO. Add `<rom bar='off'/>` to both the VGA and audio `<hostdev>` entries in the VM XML.
+
+4. **Guest kernel 6.8+ recommended.** Running an older kernel inside the guest (especially Linux guests) can result in 800x600 display only. Windows guests are generally fine.
+
+### Confirmed Vendor:Device IDs
+
+| GPU | VGA ID | Audio ID |
+|-----|--------|----------|
+| RX 9070 XT | `1002:7550` | `1002:ab28` |
+| RX 9070 | `1002:7550` | `1002:ab28` |
+| RX 9070 GRE | `1002:7550` | `1002:ab28` |
+
+### Quick Setup
+
+```bash
+# Install vendor-reset
+git clone https://github.com/gnif/vendor-reset.git
+cd vendor-reset
+make && sudo make install
+
+# Use gpupt
+bash scripts/gpupt profile add rx9070xt --vm win11-gpu \
+    --gpu 0000:01:00.0 --audio 0000:01:00.1 --driver amdgpu --late-bind
+sudo bash scripts/gpupt bind rx9070xt
+sudo bash scripts/gpupt start rx9070xt
+```
+
+---
+
+## Intel Arc GPU Passthrough
+
+Intel Arc GPUs (Alchemist DG2 and Battlemage) can be passed through to VMs with some caveats.
+
+> **Full guide:** See [`docs/INTEL_ARC.md`](docs/INTEL_ARC.md).
+
+### Key Notes
+
+- **CPUID spoofing** may be required to avoid Code 43 errors in Windows guests. You can spoof the CPUID by adding `-cpu host,migratable=on,host-phys-bits=true` to the QEMU command line.
+- **Open kernel modules (i915/xe)** recommended on the host for clean unbinding.
+- Intel Arc A310 has been confirmed working with passthrough and promoted from validation to production status.
+- Battlemage (B-series) support is in active development.
+
 ---
 
 ## Additional Guides (docs/)
@@ -1142,13 +1438,17 @@ This repository is more than a single walkthrough. Specialized guides live in `d
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the QEMU/KVM/VFIO/IOMMU stack actually fits together |
 | [PERFORMANCE.md](docs/PERFORMANCE.md) | CPU pinning, huge pages, iothreads, IRQ tuning, benchmarking |
 | [GAMING_OPTIMIZATIONS.md](docs/GAMING_OPTIMIZATIONS.md) | Gaming-focused host/guest tweaks, NVIDIA/AMD settings, anti-cheat notes |
+| [BLACKWELL.md](docs/BLACKWELL.md) | NVIDIA Blackwell (RTX 50-series) passthrough guide, GSP firmware, open modules |
+| [RDNA4.md](docs/RDNA4.md) | AMD RDNA 4 (RX 9070) passthrough guide, vendor-reset, ROM BAR quirk |
+| [INTEL_ARC.md](docs/INTEL_ARC.md) | Intel Arc GPU passthrough guide, CPUID spoofing |
+| [NOVA_DRIVER.md](docs/NOVA_DRIVER.md) | NVIDIA Nova open-source upstream driver status and guidance |
 | [LINUX_GUESTS.md](docs/LINUX_GUESTS.md) | Running Linux (not Windows) inside the VM, virtiofs, Wayland |
 | [INPUT_PASSTHROUGH.md](docs/INPUT_PASSTHROUGH.md) | Direct keyboard/mouse via evdev hooks or USB controllers |
 | [USB_PASSTHROUGH.md](docs/USB_PASSTHROUGH.md) | USB redirection vs full controller passthrough, VR, DACs |
 | [AUDIO.md](docs/AUDIO.md) | HDMI audio, SPICE, PipeWire, Scream network audio, microphones |
 | [STORAGE.md](docs/STORAGE.md) | qcow2 vs raw, disk buses, cache modes, snapshots |
 | [NETWORKING.md](docs/NETWORKING.md) | NAT, bridging, macvtap, VirtIO multi-queue, firewalls |
-| [REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) | Looking Glass, Sunshine/Moonlight, Parsec, RDP, SPICE |
+| [REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) | Looking Glass B6/B7, Sunshine/Moonlight, Parsec, RDP, SPICE |
 | [HOST_GPU.md](docs/HOST_GPU.md) | Keeping a working display (iGPU, second GPU, headless) while your GPU is in the VM |
 | [HARDWARE_DATABASE.md](docs/HARDWARE_DATABASE.md) | CPU/GPU/motherboard compatibility and known issues |
 | [SECURITY.md](docs/SECURITY.md) | ACS override risks, SELinux/AppArmor, guest isolation |
@@ -1172,8 +1472,8 @@ This repository includes helper scripts for common tasks:
 | `scripts/check_iommu_groups.sh` | Lists all IOMMU groups and their devices |
 | `scripts/check_vfio_binding.sh` | Verifies the GPU is bound to vfio-pci |
 | `scripts/status_check.sh` | One-command health check of the whole setup |
-| `scripts/setup_vfio.sh` | Interactive VFIO setup (kernel params + modprobe, `--late-bind` for RX 9000+) |
-| `scripts/bind_vfio.sh` | Manually binds/unbinds GPU to VFIO (single-GPU or AMD dynamic binding) |
+| `scripts/setup_vfio.sh` | Interactive VFIO setup (`--late-bind` for AMD RDNA 4, `--blackwell` for RTX 50-series) |
+| `scripts/bind_vfio.sh` | Manually binds/unbinds GPU to VFIO (single-GPU or late binding) |
 | `scripts/install_packages.sh` | Installs all required virtualization packages |
 | `scripts/generate_vm_xml.sh` | Generates a starter VM XML with optimal settings |
 | `scripts/create_disk.sh` | Creates qcow2/raw VM disk images |
@@ -1186,7 +1486,7 @@ This repository includes helper scripts for common tasks:
 | `scripts/snapshot_vm.sh` | Create/list/revert/delete VM snapshots |
 | `scripts/collect_info.sh` | Dumps all diagnostics for a support thread |
 | `scripts/vmctl.sh` | Unified VM lifecycle + GPU controller (`status`, `start`, `stop`, `reboot`, `attach-gpu`, `detach-gpu`, `info`) |
-| `scripts/gpu_recovery.sh` | Recovers a stuck GPU after a VM crash (force-unbind + PCI reset + rebind) |
+| `scripts/gpu_recovery.sh` | Recovers a stuck GPU after a VM crash (force-unbind + PCI reset + rebind); handles Blackwell WPR2 |
 | `scripts/gpupt` | One-command CLI for the whole workflow (`doctor`, `detect`, `profile`, `bind`/`unbind`, `start`/`stop`, `hooks`, `recover`, `log`) |
 
 All scripts require root privileges where noted. Run with `sudo bash scripts/<script>.sh`.
@@ -1237,6 +1537,8 @@ host driver:
 sudo bash scripts/gpu_recovery.sh 0000:01:00.0 0000:01:00.1 nvidia
 ```
 
+> **Blackwell users:** This script now detects the WPR2 reset bug and will suggest a host reboot if the FLR fails.
+
 The full reference for these tools lives in [`docs/MANAGEMENT.md`](docs/MANAGEMENT.md).
 
 ### `gpupt` — one command for everything
@@ -1248,15 +1550,22 @@ wizard and `--dry-run` make it safe to explore before it touches anything:
 
 ```bash
 bash scripts/gpupt doctor                          # full health check, exit codes for scripts
-bash scripts/gpupt profile add win11 --vm win11-gpu \
+
+# Blackwell profile
+bash scripts/gpupt profile add rtx5090 --vm win11-gpu \
+    --gpu 0000:01:00.0 --audio 0000:01:00.1 --driver nvidia-open --late-bind
+
+# RDNA 4 profile
+bash scripts/gpupt profile add rx9070xt --vm win11-gpu \
     --gpu 0000:01:00.0 --audio 0000:01:00.1 --driver amdgpu --late-bind
+
 bash scripts/gpupt profile list
-bash scripts/gpupt bind win11 --dry-run            # preview before it stops the display manager
-sudo bash scripts/gpupt bind win11                 # stop DM + hand GPU to vfio-pci
-sudo bash scripts/gpupt start win11
-sudo bash scripts/gpupt stop win11
-sudo bash scripts/gpupt unbind win11               # restore host driver + restart DM
-sudo bash scripts/gpupt hooks install              # generate the libvirt qemu hook
+bash scripts/gpupt bind rtx5090 --dry-run         # preview before it stops the display manager
+sudo bash scripts/gpupt bind rtx5090              # stop DM + hand GPU to vfio-pci
+sudo bash scripts/gpupt start rtx5090
+sudo bash scripts/gpupt stop rtx5090
+sudo bash scripts/gpupt unbind rtx5090            # restore host driver + restart DM
+sudo bash scripts/gpupt hooks install             # generate the libvirt qemu hook
 bash scripts/gpupt status
 ```
 
@@ -1266,8 +1575,8 @@ bash scripts/gpupt status
 | `detect`, `groups [PCI...]` | GPUs, IDs, drivers, IOMMU groups |
 | `status [PROFILE]` | VMs, GPUs, and configured profiles in one view |
 | `profile add/show/edit/rm/list` | Manage GPU profiles (wizard or CLI flags) |
-| `bind [PROFILE|PCI...] [--dry-run]` | Stop DM and bind GPU to vfio-pci (`--no-dm` to skip) |
-| `unbind [PROFILE|PCI...] [--dry-run]` | Rebind the host driver and restart the DM |
+| `bind [PROFILE\|PCI...] [--dry-run]` | Stop DM and bind GPU to vfio-pci (`--no-dm` to skip) |
+| `unbind [PROFILE\|PCI...] [--dry-run]` | Rebind the host driver and restart the DM |
 | `start PROFILE [--no-bind]` / `stop PROFILE` | Start/stop the VM around the profile's GPU |
 | `hooks install/remove/status` | Generate/remove the libvirt `qemu` hook |
 | `recover GPU [AUDIO] [DRIVER]` | Force-unbind + PCI reset + rebind a stuck GPU |
@@ -1283,7 +1592,9 @@ Single-GPU passthrough is an advanced setup where the same GPU is used for the h
 
 **This is significantly more complex than dual-GPU passthrough.**
 
-> **AMD GPU note:** If you are using an AMD RX 9000 series GPU (or want the ReBAR benefit on RX 6000/7000), single-GPU passthrough already does dynamic unbind/bind via `bind_vfio.sh`, which naturally satisfies the requirement of letting `amdgpu` initialize the card first. Simply run the script as described below — no extra configuration needed.
+> **NVIDIA Blackwell note:** Single-GPU passthrough with RTX 50-series adds the WPR2 reset bug to the mix. If the GPU doesn't recover after VM shutdown, you will need to reboot the host. The `vendor-reset` module helps but is not a guaranteed fix for Blackwell yet.
+
+> **AMD RDNA 4 note:** Single-GPU passthrough with RX 9070 already does dynamic unbind/bind via `bind_vfio.sh`, which naturally satisfies the requirement of letting `amdgpu` initialize the card first. Install `vendor-reset` for clean recovery.
 
 ### Requirements
 
@@ -1322,10 +1633,6 @@ VM_NAME="win11-gpu"
 GPU_ADDR="0000:01:00.0"
 GPU_AUDIO="0000:01:00.1"
 
-# For AMD GPUs (especially RX 9000+), skip unloading amdgpu here.
-# The GPU needs amdgpu to init first; the unbind below is sufficient
-# to release it for vfio-pci.
-
 case "$1" in
   "$VM_NAME")
     case "$2" in
@@ -1336,8 +1643,8 @@ case "$1" in
         # let amdgpu init the card, then just unbind
         echo "$GPU_ADDR" > /sys/bus/pci/devices/$GPU_ADDR/driver/unbind 2>/dev/null
         echo "$GPU_AUDIO" > /sys/bus/pci/devices/$GPU_AUDIO/driver/unbind 2>/dev/null
-        echo "10de 1af2" > /sys/bus/pci/drivers/vfio-pci/new_id
-        echo "10de 1af9" > /sys/bus/pci/drivers/vfio-pci/new_id
+        echo "10de 28a2" > /sys/bus/pci/drivers/vfio-pci/new_id
+        echo "10de 22e9" > /sys/bus/pci/drivers/vfio-pci/new_id
         ;;
       stopped)
         echo "$GPU_ADDR" > /sys/bus/pci/devices/$GPU_ADDR/driver/unbind 2>/dev/null
@@ -1364,7 +1671,9 @@ Common issues and quick fixes are listed below. For the full troubleshooting ref
 | VM fails to start | Rebuild initramfs, verify VFIO IDs | Full guide in [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#vm-does-not-start) |
 | Black screen after GPU driver install | Connect monitor to passthrough GPU or use remote access | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#black-screen-after-driver-install) |
 | NVIDIA Error Code 43 | Add `<kvm><hidden state='on'/></kvm>` and `<vendor_id>` to VM XML | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#nvidia-error-code-43) |
+| NVIDIA RmInitAdapter error (Blackwell/Ada) | Install open kernel modules (`nvidia-open`) | [BLACKWELL.md](docs/BLACKWELL.md) |
 | GPU stuck after VM shutdown (reset bug) | Reboot host, or install `vendor-reset` kernel module | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#gpu-does-not-reset) |
+| Blackwell WPR2 reset bug | Host reboot (short-term), `vendor-reset` (long-term) | [BLACKWELL.md](docs/BLACKWELL.md#wpr2-reset-bug) |
 | GPU bound to host driver after reboot | Verify kernel params, rebuild initramfs and bootloader | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#gpu-bound-to-host-after-reboot) |
 | VM is slow or stuttering | Set CPU governor to `performance`, pin vCPUs, disable balloon | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#vm-is-slow-or-stuttering) |
 | Windows BSOD during install | Use correct VirtIO driver, reduce vCPUs temporarily | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#bsod-during-installation) |
@@ -1372,137 +1681,128 @@ Common issues and quick fixes are listed below. For the full troubleshooting ref
 | IOMMU not enabled | Enable VT-d/AMD-Vi in BIOS, add kernel parameters | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#iommu-not-enabled) |
 | Bad IOMMU groups | Move GPU to different slot, enable ACS, update BIOS | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#bad-iommu-groups) |
 | Guest display flickering | Remove or disable virtual video device | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#guest-display-flickering) |
-| Network not working in guest | Install VirtIO net driver or switch to emulated NIC | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#network-not-working-in-guest) |
-| USB passthrough issues | Pass through a full USB controller via PCI | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#usb-passthrough-issues) |
-| Audio issues | Add user to `audio`/`pulse-access` groups | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#audio-issues) |
+| RDNA 4 800x600 display only | Use kernel 6.8+ inside the Linux guest | [RDNA4.md](docs/RDNA4.md) |
+| RDNA 4 VM crashes on start | Add `<rom bar='off'/>` to both hostdev entries | [RDNA4.md](docs/RDNA4.md) |
+| Intel Arc Code 43 | CPUID spoofing required | [INTEL_ARC.md](docs/INTEL_ARC.md) |
 
 ---
 
 ## FAQ
 
-For the complete FAQ, see [`docs/FAQ.md`](docs/FAQ.md).
+Common questions and answers. For the full FAQ, see [`docs/FAQ.md`](docs/FAQ.md).
 
-**Highlights:**
-- **Single-GPU passthrough?** Possible but complex — see the [Single-GPU Passthrough](#single-gpu-passthrough) section.
-- **Which GPU to buy?** NVIDIA RTX 30/40 series and AMD RX 6000/7000/9000 series are well-supported.
-- **Do I need to pass through audio too?** Yes, include the `.1` audio function.
-- **Performance overhead?** 2-5% GPU, negligible CPU/storage/network with proper tuning.
-- **Secure Boot?** Generally no — disable it in BIOS.
-- **Bad IOMMU groups?** Move GPU to another slot, enable ACS, update BIOS, or apply the ACS override patch.
+**Q: Can I pass through an NVIDIA RTX 5090/5080?**
+A: Yes. You need the open kernel modules (`nvidia-open`), late binding (do not add IDs to `vfio-pci.ids` at boot), and should be aware of the WPR2 reset bug. See [`docs/BLACKWELL.md`](docs/BLACKWELL.md).
+
+**Q: Can I pass through an AMD RX 9070/9070 XT?**
+A: Yes. Late binding is mandatory (`amdgpu` must initialize first), `vendor-reset` is needed for clean GPU reset, and you need `<rom bar='off'/>` in the VM XML. See [`docs/RDNA4.md`](docs/RDNA4.md).
+
+**Q: Do I need `amd_iommu=on` in my kernel parameters?**
+A: No. That parameter is a no-op on modern kernels (6.x+). The AMD IOMMU enables itself when AMD-Vi is on in the BIOS. See [`docs/FAQ.md`](docs/FAQ.md#iommu-parameters).
+
+**Q: Which NVIDIA driver version should I use in the VM?**
+A: For Blackwell/Ada, use the R580 or R595 branch with the open kernel module variant. For Turing and older, any recent driver works. If you hit Code 43, try an older version first.
+
+**Q: What about the NVIDIA Nova driver?**
+A: Nova is NVIDIA's open-source upstream kernel driver for GSP-based GPUs. NVIDIA posted a vGPU Manager and VFIO variant driver for Nova in September 2026. It's promising but not yet recommended for production VFIO passthrough. See [`docs/NOVA_DRIVER.md`](docs/NOVA_DRIVER.md).
+
+**Q: Does Looking Glass work with Blackwell/RDNA 4?**
+A: Yes. Use the B6 or B7 release with the KVMFR kernel module for best performance. B7's D12 capture uses the GPU's hardware copy engine, so even iGPU hosts get good results.
+
+**Q: Is single-GPU passthrough still a thing in 2026?**
+A: Yes, but it's harder with new hardware. Blackwell has the WPR2 reset bug, RDNA 4 needs vendor-reset. Always keep SSH access available.
+
+**Q: What kernel version do I need?**
+A: Minimum 6.12. This gives you PREEMPT_RT, VirtIO Vsock improvements, and fixes for AMD Ryzen random reboots during virtualization. For best Blackwell/RDNA 4 support, use 6.14+ or 7.x.
+
+**Q: I have an Intel Arc GPU. Can I pass it through?**
+A: Yes, with CPUID spoofing. See [`docs/INTEL_ARC.md`](docs/INTEL_ARC.md).
 
 ---
 
 ## Repository Structure
 
 ```
-gpu-passthrough-kvm/
-|-- README.md                         # This guide
-|-- LICENSE                           # MIT License
-|-- CONTRIBUTING.md                   # Contribution guidelines
-|-- Makefile                          # `make <target>` entrypoint
-|-- .gitignore                        # Git ignore rules
-|-- .editorconfig                     # Editor style consistency
-|-- .shellcheckrc                     # ShellCheck project rules
-|-- install.sh                        # Environment verification
-
-|-- .github/
-|   `-- workflows/
-|       `-- shellcheck.yml            # CI: shellcheck every PR/push
-
-|-- docs/
-|   |-- GUIDE.md                      # Condensed quick-reference guide
-|   |-- ARCHITECTURE.md               # How the QEMU/KVM/VFIO/IOMMU stack fits together
-|   |-- TROUBLESHOOTING.md            # Extended troubleshooting reference
-|   |-- FAQ.md                        # Frequently asked questions
-|   |-- PERFORMANCE.md                # CPU/memory/storage/network/GPU tuning
-|   |-- GAMING_OPTIMIZATIONS.md       # Gaming-focused tuning + anti-cheat notes
-|   |-- LINUX_GUESTS.md               # Linux guests, virtiofs, Wayland
-|   |-- INPUT_PASSTHROUGH.md          # evdev + USB input passthrough
-|   |-- USB_PASSTHROUGH.md            # USB redirection vs controller passthrough
-|   |-- AUDIO.md                      # HDMI/SPICE/PipeWire/Scream audio
-|   |-- STORAGE.md                    # Disk formats, buses, cache modes, backups
-|   |-- NETWORKING.md                 # NAT, bridges, macvtap, multi-queue
-|   |-- REMOTE_ACCESS.md              # Looking Glass, Sunshine, Parsec, RDP
-|   |-- HOST_GPU.md                   # iGPU/second GPU/headless host display
-|   |-- HARDWARE_DATABASE.md          # CPU/GPU/motherboard compatibility
-|   |-- SECURITY.md                   # ACS override, SELinux/AppArmor, hardening
-|   |-- UPGRADING.md                  # Kernel/distro/BIOS update survival
-|   |-- SNAPSHOTS_BACKUPS.md          # Live backups, snapshots, restore
-|   |-- GLOSSARY.md                   # Every term explained
-|   |-- GPUPT.md                      # gpupt CLI reference
-|   `-- MANAGEMENT.md                 # vmctl.sh, gpu_recovery.sh, Makefile reference
-
-|-- scripts/
-|   |-- detect_gpu.sh                 # GPU detection and ID listing
-|   |-- check_iommu_groups.sh         # IOMMU group inspection
-|   |-- check_vfio_binding.sh         # VFIO binding verification
-|   |-- status_check.sh               # One-command health check
-|   |-- setup_vfio.sh                 # Interactive VFIO config generator
-|   |-- bind_vfio.sh                  # Manual GPU bind/unbind (single-GPU)
-|   |-- install_packages.sh           # Package installation (multi-distro)
-|   |-- generate_vm_xml.sh            # VM XML template generator
-|   |-- create_disk.sh                # VM disk image creation
-|   |-- download_virtio.sh            # virtio-win ISO downloader
-|   |-- start_vm.sh                   # VM start wrapper (+GPU bind)
-|   |-- stop_vm.sh                    # VM stop wrapper (+GPU rebind)
-|   |-- setup_hugepages.sh            # Huge page configuration
-|   |-- backup_vm.sh                  # VM backup (disk+XML+NVRAM)
-|   |-- restore_vm.sh                 # VM restore
-|   |-- snapshot_vm.sh                # VM snapshot create/list/revert/delete
-|   |-- collect_info.sh               # Diagnostic dump for support threads
-|   |-- vmctl.sh                      # Unified VM/GPU lifecycle controller
-|   |-- gpu_recovery.sh               # Recover a stuck GPU after VM crash
-|   `-- gpupt                         # One-command CLI (profiles, bind, hooks, ...)
-
-|-- setup/
-|   |-- debian-ubuntu.sh              # Debian/Ubuntu host setup
-|   |-- arch.sh                       # Arch Linux host setup
-|   |-- fedora.sh                     # Fedora host setup
-|   `-- opensuse.sh                   # openSUSE host setup
-
-`-- examples/
-    |-- libvirt-hooks/
-    |   |-- qemu                      # Complete single-GPU hook
-    |   `-- README.md                 # Hook usage + event reference
-    |-- udev/
-    |   `-- 60-qemu-input.rules       # evdev input permissions
-    |-- systemd/
-    |   |-- hugepages.service         # Huge page reservation service
-    |   `-- autostart-vm.service      # Optional VM autostart at boot
-    `-- xml/
-        |-- README.md                 # Ready-to-paste VM XML snippets
-        |-- looking-glass.xml         # LG shared memory device
-        |-- input-evdev.xml           # Physical input passthrough
-        |-- virtiofs.xml              # Shared folder
-        |-- usb-device.xml            # USB device passthrough
-        `-- pci-hostdev.xml           # Single PCI function passthrough
+GPU-Passthrough-for-KVM-QEMU-on-Linux/
+├── README.md                    # This file
+├── CONTRIBUTING.md              # How to contribute
+├── LICENSE                      # MIT license
+├── Makefile                     # Make targets (make status, make vm-start, etc.)
+├── install.sh                   # Quick installer
+├── setup/
+│   ├── debian.sh               # Debian/Ubuntu setup
+│   ├── arch.sh                 # Arch Linux setup
+│   ├── fedora.sh               # Fedora setup
+│   └── opensuse.sh             # openSUSE setup
+├── scripts/
+│   ├── gpupt                   # Main CLI tool (profile-driven)
+│   ├── vmctl.sh                # Unified VM lifecycle controller
+│   ├── gpu_recovery.sh         # Stuck GPU recovery
+│   ├── status_check.sh         # Health check
+│   ├── setup_vfio.sh           # Interactive VFIO setup
+│   ├── detect_gpu.sh           # GPU detection
+│   ├── check_iommu_groups.sh   # IOMMU group inspection
+│   ├── check_vfio_binding.sh   # VFIO binding verification
+│   ├── bind_vfio.sh            # Manual VFIO bind/unbind
+│   ├── install_packages.sh     # Package installation
+│   ├── generate_vm_xml.sh      # VM XML generator
+│   ├── create_disk.sh          # VM disk creation
+│   ├── download_virtio.sh      # VirtIO ISO download
+│   ├── start_vm.sh             # VM start with GPU binding
+│   ├── stop_vm.sh              # VM stop with GPU rebinding
+│   ├── setup_hugepages.sh      # Huge pages configuration
+│   ├── backup_vm.sh            # VM backup
+│   ├── restore_vm.sh           # VM restore
+│   ├── snapshot_vm.sh          # VM snapshots
+│   └── collect_info.sh         # Diagnostic dump
+├── examples/
+│   ├── xml/                    # Ready-to-use XML snippets
+│   ├── systemd/                # Systemd units
+│   └── hooks/                  # Libvirt hooks
+├── docs/
+│   ├── GUIDE.md                # Full step-by-step guide
+│   ├── ARCHITECTURE.md         # QEMU/KVM/VFIO/IOMMU stack
+│   ├── PERFORMANCE.md          # Performance tuning
+│   ├── GAMING_OPTIMIZATIONS.md # Gaming-specific tweaks
+│   ├── BLACKWELL.md            # NVIDIA Blackwell (RTX 50) guide
+│   ├── RDNA4.md                # AMD RDNA 4 (RX 9070) guide
+│   ├── INTEL_ARC.md            # Intel Arc guide
+│   ├── NOVA_DRIVER.md          # NVIDIA Nova driver status
+│   ├── LINUX_GUESTS.md         # Linux guest setup
+│   ├── INPUT_PASSTHROUGH.md    # Keyboard/mouse passthrough
+│   ├── USB_PASSTHROUGH.md      # USB passthrough
+│   ├── AUDIO.md                # Audio setup
+│   ├── STORAGE.md              # Storage configuration
+│   ├── NETWORKING.md           # Network setup
+│   ├── REMOTE_ACCESS.md        # Remote display (LG, Sunshine, etc.)
+│   ├── HOST_GPU.md             # Host GPU management
+│   ├── HARDWARE_DATABASE.md    # Compatibility database
+│   ├── SECURITY.md             # Security considerations
+│   ├── UPGRADING.md            # Upgrade survival guide
+│   ├── SNAPSHOTS_BACKUPS.md    # Snapshots and backups
+│   ├── GLOSSARY.md             # Terms and acronyms
+│   ├── FAQ.md                  # Frequently asked questions
+│   ├── TROUBLESHOOTING.md      # Extended troubleshooting
+│   ├── MANAGEMENT.md           # vmctl.sh, gpu_recovery.sh reference
+│   └── GPUPT.md                # gpupt CLI reference
+└── .github/
+    └── workflows/
+        └── shellcheck.yml      # CI linting
 ```
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-When reporting issues, include:
-- Distribution and version
-- Kernel version (`uname -r`)
-- CPU and GPU model
-- Motherboard model and BIOS version
-- Output of `lspci -nnk`
-- Output of `dmesg | grep -Ei 'vfio|iommu|dmar'`
-- Exact steps to reproduce the problem
+Before submitting a PR:
+1. Run `shellcheck` on any scripts you modified (the CI will catch it anyway)
+2. Test your changes on real hardware if possible
+3. If you are adding support for a new GPU, include the vendor:device IDs and any quirks you discovered
 
 ---
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
-
----
-
-<p align="center">
-  <sub>If this guide helped you, consider giving it a star on GitHub.</sub><br>
-  <sub>GPU passthrough is complex. This repository makes it manageable.</sub><br>
-  <sub>v3.0.0 — Last updated: 2026</sub>
-</p>
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
